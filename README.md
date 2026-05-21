@@ -16,39 +16,6 @@ End goal: process all ~50 volumes with the same pipeline and merge their
 JSON-LD graphs into a single corpus-wide knowledge graph where articles,
 authors, sections, and volumes are nodes you can query.
 
----
-
-## What changed from the notebook
-
-The previous notebook did a great job of the OCR → HTML edition path but
-the structure detection was acknowledged as "intentionally crude" and the
-codebase wasn't easy to extend toward the knowledge graph. This refactor:
-
-1. **Modularised into a real Python package** (`pjb_pipeline/`) with a CLI.
-   No more "edit cell 1 and re-run all".
-2. **TOC-driven article detection** — the OCR already finds the
-   table-of-contents block on every volume; we now parse it into
-   structured `(section, author, title, page)` entries and use those as
-   ground truth for article boundaries, instead of guessing from
-   section-header positions.
-3. **Footnote-reference linking** — references inside body text
-   (`1^`, Unicode superscripts) are detected and turned into HTML anchor
-   links pointing to the resolved footnote element.
-4. **JSON-LD knowledge graph** — each volume now emits a
-   schema.org-flavoured graph fragment with stable IRIs for Series,
-   Volume, Section, Article, Page, Person and Footnote. The same author
-   appearing in multiple volumes shares an IRI, so a downstream merge
-   step deduplicates trivially.
-5. **vLLM-server backend** — the OCR module now reads
-   `ocr.method: vllm` and `ocr.vllm_url` from config so the same code
-   runs on Colab (local HF) and on your GPU host (remote vLLM).
-6. **CSS/JS lifted out of Python strings** — they live in `assets/` and
-   are copied into each volume's output. Edit one file, every edition
-   updates.
-7. **Per-volume YAML config** instead of editing cells — copy
-   `configs/pjb-048-2006.yaml`, change four fields, run.
-
----
 
 ## Install
 
