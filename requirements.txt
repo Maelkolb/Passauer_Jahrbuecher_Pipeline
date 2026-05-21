@@ -1,0 +1,12 @@
+# Pin the runtime libs. Chandra is in the extras of pyproject.toml; pick
+# one of "hf" / "vllm" depending on backend, or install chandra-ocr by hand.
+
+PyMuPDF>=1.24
+Pillow>=10.0
+lxml>=4.9
+tqdm>=4.66
+PyYAML>=6.0
+
+# Pick one of these — comment out the one you don't want:
+chandra-ocr[hf]    # local-model Colab path
+# chandra-ocr      # vLLM-server path (much lighter install)

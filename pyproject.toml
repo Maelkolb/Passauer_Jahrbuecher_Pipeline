@@ -1,0 +1,45 @@
+[build-system]
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name            = "pjb-pipeline"
+version         = "0.2.0"
+description     = "Passauer Jahrbücher digital edition pipeline (Chandra OCR → TEI/PageXML/HTML/JSON-LD)"
+readme          = "README.md"
+requires-python = ">=3.10"
+license         = { text = "MIT" }
+authors         = [{ name = "Passauer Jahrbücher Project" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Text Processing :: Markup :: XML",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = [
+    "PyMuPDF>=1.24",
+    "Pillow>=10.0",
+    "lxml>=4.9",
+    "tqdm>=4.66",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# OCR backends — Chandra. Pick one when you install:
+#   pip install -e ".[hf]"    – Colab / local GPU
+#   pip install -e ".[vllm]"  – talk to a vLLM server (no local model load)
+hf   = ["chandra-ocr[hf]"]
+vllm = ["chandra-ocr"]
+
+# Development / tests
+dev  = ["pytest>=7", "pytest-cov"]
+
+[project.scripts]
+pjb-pipeline = "pjb_pipeline.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pjb_pipeline*"]
+
+[tool.setuptools.package-data]
+# Ship the canonical CSS/JS alongside the package so a pip install carries them.
+pjb_pipeline = ["../assets/edition.css", "../assets/edition.js"]
