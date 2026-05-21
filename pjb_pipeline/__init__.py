@@ -6,4 +6,4 @@ TEI-XML, PageXML, a static HTML edition, and a JSON-LD knowledge-graph
 fragment that can be merged with other volumes downstream.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

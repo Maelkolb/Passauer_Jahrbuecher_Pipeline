@@ -95,6 +95,7 @@ def build_unified_page(raw_doc: dict) -> dict:
             "raw_type": b.get("type", "text"),
             "bbox":     to_pixel_bbox(b.get("bbox"), w, h),
             "text":     b.get("text", "").strip(),
+            "html":     b.get("html", "").strip(),   # rich HTML content from Chandra
         })
     # Fallback: dump the markdown into a single text block so the page
     # isn't completely empty when layout parsing failed.
@@ -105,6 +106,7 @@ def build_unified_page(raw_doc: dict) -> dict:
             "raw_type": "text",
             "bbox":     [0, 0, w, h],
             "text":     raw_doc["markdown"].strip(),
+            "html":     "",
         })
     return {
         "page_num":       raw_doc["page_num"],

@@ -977,3 +977,136 @@ figure.visual-region figcaption {
   .masthead, .article-nav, .page-nav { display: none; }
   .article { max-width: none; padding: 0; }
 }
+
+/* ============================================================
+   Two-column transcription layout (added 2026-05-21)
+   Mirrors the original printed page when the OCR detected
+   two columns from block bbox positions.
+   ============================================================ */
+
+/* Spanning block container (section headers, TOC, figures wider
+   than one column, page header/footer) — runs full width above
+   the column pair. */
+.trans-span {
+  margin-bottom: 1.2em;
+}
+.trans-span .region[data-type="section-header"] {
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: 1.55em;
+  line-height: 1.2;
+  margin: 1em 0 0.6em;
+  color: var(--ink);
+}
+.trans-span .region[data-type="page-header"],
+.trans-span .region[data-type="page-footer"] {
+  font-family: var(--ui);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+/* The two-column pair itself. */
+.trans-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.6rem;
+  align-items: start;
+}
+.trans-col {
+  min-width: 0;    /* let long words wrap inside a grid track */
+}
+.trans-col .region {
+  margin-bottom: 0.8em;
+}
+
+/* On narrow viewports we collapse to a single column so the
+   transcription stays readable on phones / split-screen. */
+@media (max-width: 720px) {
+  .trans-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Rich-content rendering (Chandra 2 returns HTML directly inside
+   each block, including tables and lists — these rules style them
+   without disrupting the editorial look). */
+.region table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin: 0.6em 0;
+  font-variant-numeric: tabular-nums;
+}
+.region table td,
+.region table th {
+  padding: 0.35em 0.55em;
+  border-bottom: 1px solid var(--rule-soft);
+  text-align: left;
+  vertical-align: top;
+}
+.region table th {
+  font-family: var(--ui);
+  font-weight: 500;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-soft);
+}
+.region[data-type="table-of-contents"] table td {
+  border-bottom: 1px dotted var(--rule-soft);
+}
+.region[data-type="table-of-contents"] table td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  padding-left: 1.4em;
+}
+.region ul,
+.region ol {
+  margin: 0.5em 0 0.5em 1.4em;
+  padding: 0;
+}
+.region h1, .region h2, .region h3, .region h4 {
+  font-family: var(--display);
+  font-weight: 500;
+  margin: 0.4em 0 0.3em;
+  line-height: 1.2;
+}
+.region[data-type="section-header"] h1,
+.region[data-type="section-header"] h2,
+.region[data-type="section-header"] h3 {
+  text-align: center;
+  letter-spacing: 0.04em;
+}
+
+/* Inline footnote anchors inside rich HTML */
+.region a[href^="#fn-"] {
+  color: var(--accent);
+  background: none;
+  font-weight: 600;
+  text-decoration: none;
+}
+.region a[href^="#fn-"]:hover {
+  color: var(--accent-warm);
+  text-decoration: underline;
+}
+
+/* Region overlay visibility — boxes now show by default. A subtle
+   default tint avoids overwhelming the page; full saturation kicks
+   in on hover so the user can still inspect individual regions. */
+.facsimile-stage[data-show-regions="on"] .region-box {
+  background: rgba(122, 31, 43, 0.04);
+}
+.facsimile-stage[data-show-regions="on"] .region-box[data-type="figure"],
+.facsimile-stage[data-show-regions="on"] .region-box[data-type="image"],
+.facsimile-stage[data-show-regions="on"] .region-box[data-type="diagram"] {
+  background: rgba(168, 124, 59, 0.06);
+}
+.facsimile-stage[data-show-regions="on"] .region-box-label {
+  /* Stay subtle until hover so the page isn't a wall of labels */
+  opacity: 0.65;
+}

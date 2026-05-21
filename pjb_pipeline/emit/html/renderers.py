@@ -82,6 +82,145 @@ def alt_text(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Rich-content sanitiser (for Chandra v2's HTML payload)
+# ---------------------------------------------------------------------------
+
+# Tags that may appear inside a Chandra ``content`` HTML fragment. Everything
+# else gets unwrapped (its text content is kept, the tag is dropped).
+_RICH_ALLOWED_TAGS = {
+    "p", "h1", "h2", "h3", "h4", "h5", "h6",
+    "table", "thead", "tbody", "tfoot", "tr", "td", "th", "colgroup", "col",
+    "ul", "ol", "li",
+    "sup", "sub", "small",
+    "b", "i", "em", "strong", "u", "s",
+    "br", "span", "mark",
+    "img", "figure", "figcaption",
+    "code", "pre", "blockquote",
+    "math", "mrow", "mi", "mn", "mo", "mfrac", "msup", "msub", "msqrt",
+    "div",
+    "a",
+}
+
+# Per-tag allow-list of attributes. ``*`` is the default for unlisted tags.
+_RICH_ALLOWED_ATTRS = {
+    "img":  ["src", "alt", "loading", "class"],
+    "a":    ["href", "class", "id"],
+    "td":   ["colspan", "rowspan", "class"],
+    "th":   ["colspan", "rowspan", "scope", "class"],
+    "col":  ["span"],
+    "sup":  ["class", "id"],
+    "div":  ["class"],
+    "span": ["class"],
+    "*":    [],
+}
+
+
+def sanitize_block_html(html_fragment: str) -> str:
+    """Run a Chandra-emitted HTML fragment through a tag/attr allow-list.
+
+    Drops anything we don't recognise (script/style/iframe/event handlers)
+    but keeps the structural content — `<h2>`, `<table>`, `<sup>`, etc."""
+    if not html_fragment:
+        return ""
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        # No bs4 — fall back to plain escape (loses structure but is safe).
+        return html.escape(html_fragment, quote=False)
+
+    soup = BeautifulSoup(html_fragment, "html.parser")
+    for tag in list(soup.find_all(True)):
+        if tag.name not in _RICH_ALLOWED_TAGS:
+            tag.unwrap()
+            continue
+        allowed = _RICH_ALLOWED_ATTRS.get(tag.name, _RICH_ALLOWED_ATTRS["*"])
+        for attr in list(tag.attrs.keys()):
+            if attr not in allowed:
+                del tag.attrs[attr]
+    return str(soup)
+
+
+def _inject_fn_refs_into_html(
+    html_fragment: str,
+    notes_by_n: Dict[int, Footnote],
+) -> str:
+    """Walk ``html_fragment``'s text nodes and replace each ``Nfootnote-marker``
+    pattern with an anchor linking to the resolved footnote block.
+
+    Handles two marker styles:
+      * ``<sup>1</sup>`` — Chandra v2's typical encoding
+      * inline ``1^`` in plain text — older chandra / our previous tests
+    """
+    if not html_fragment or not notes_by_n:
+        return html_fragment
+    try:
+        from bs4 import BeautifulSoup, NavigableString
+    except ImportError:
+        return html_fragment
+
+    soup = BeautifulSoup(html_fragment, "html.parser")
+
+    # 1) Wrap each <sup>N</sup> in a link to the corresponding footnote
+    for sup in list(soup.find_all("sup")):
+        # If the user already wrapped it in <a>, leave it
+        if sup.find("a"):
+            continue
+        inner = (sup.get_text() or "").strip()
+        if not inner.isdigit():
+            continue
+        n = int(inner)
+        target = notes_by_n.get(n)
+        if not target:
+            sup["class"] = (sup.get("class") or []) + ["fn-ref"]
+            continue
+        a = soup.new_tag("a", href=f"#{target.html_id}")
+        a.string = str(n)
+        sup.clear()
+        sup["class"] = (sup.get("class") or []) + ["fn-ref"]
+        sup.append(a)
+
+    # 2) Replace the inline ``N^`` pattern in raw text nodes
+    import re as _re
+    pat = _re.compile(r"(?<!\d)(\d{1,3})\^")
+    for node in list(soup.find_all(string=True)):
+        if not isinstance(node, NavigableString):
+            continue
+        text = str(node)
+        if "^" not in text:
+            continue
+        new_pieces = []
+        last = 0
+        any_match = False
+        for m in pat.finditer(text):
+            any_match = True
+            new_pieces.append(text[last:m.start()])
+            n = int(m.group(1))
+            target = notes_by_n.get(n)
+            sup_tag = soup.new_tag("sup", **{"class": "fn-ref"})
+            if target:
+                a = soup.new_tag("a", href=f"#{target.html_id}")
+                a.string = str(n)
+                sup_tag.append(a)
+            else:
+                sup_tag.string = str(n)
+            new_pieces.append(sup_tag)
+            last = m.end()
+        if not any_match:
+            continue
+        new_pieces.append(text[last:])
+        # Replace the text node with the new mixed-content sequence
+        for piece in new_pieces:
+            if isinstance(piece, str):
+                if piece:
+                    node.insert_before(NavigableString(piece))
+            else:
+                node.insert_before(piece)
+        node.extract()
+
+    return str(soup)
+
+
+# ---------------------------------------------------------------------------
 # Text with footnote-reference linking
 # ---------------------------------------------------------------------------
 
@@ -167,50 +306,95 @@ def render_block_html(
     blk,
     notes_by_n: Optional[Dict[int, Footnote]] = None,
 ) -> str:
-    """Render one block for the per-page transcription column."""
+    """Render one block for the per-page transcription column.
+
+    Strategy depends on whether Chandra returned rich HTML for this block:
+
+    * **rich HTML available** (Chandra 2 path) — sanitise it and embed
+      directly, so tables stay as ``<table>``, headers as ``<h2>``, etc.
+      Footnote references get woven into the HTML in place.
+
+    * **plain text only** (older Chandra / fallback) — apply the old
+      pipeline: HTML-escape, replace newlines with ``<br>``, inject
+      footnote refs.
+    """
     bid = html_escape(blk["id"])
     btype = blk["type"]
     bbox = ",".join(str(v) for v in blk["bbox"])
+    col = blk.get("_column")
+    col_attr = f' data-column="{col}"' if col is not None else ' data-column="span"'
     notes_by_n = notes_by_n or {}
 
-    # Visual regions: embed the actual crop.
-    if btype in VISUAL_BLOCK_TYPES and blk.get("_crop"):
-        rel = f"../{REGIONS_DIR_NAME}/{blk['_crop']}"
-        cap_text = blk.get("text", "") or ""
-        cap_html = sanitize_inline_html(cap_text).replace("\n", "<br>") if cap_text else ""
-        alt = alt_text(cap_text) or html_escape(btype)
-        inner = f'<img src="{rel}" alt="{alt}" loading="lazy">'
-        if cap_html:
-            inner += f'<span class="region-caption">{cap_html}</span>'
+    # Visual regions: embed the actual crop with the rich caption HTML
+    # alongside (Chandra 2's content for a Picture usually includes the
+    # caption text inside the same fragment).
+    if btype in VISUAL_BLOCK_TYPES:
+        rich_html = blk.get("html") or ""
+        rich_html = sanitize_block_html(rich_html)
+        if blk.get("_crop"):
+            rel = f"../{REGIONS_DIR_NAME}/{blk['_crop']}"
+            cap_text = blk.get("text", "") or ""
+            alt = alt_text(cap_text) or html_escape(btype)
+            inner = f'<img src="{rel}" alt="{alt}" loading="lazy">'
+            if rich_html and rich_html.strip() not in ("", "<p></p>"):
+                inner += f'<div class="region-caption">{rich_html}</div>'
+            return (
+                f'<div class="region" data-type="{btype}" data-bbox="{bbox}" '
+                f'id="{bid}"{col_attr}>{inner}</div>'
+            )
+        # No crop saved — render whatever rich HTML chandra gave us
+        if rich_html:
+            return (
+                f'<div class="region" data-type="{btype}" data-bbox="{bbox}" '
+                f'id="{bid}"{col_attr}>{rich_html}</div>'
+            )
+        # Final fallback: a placeholder
         return (
-            f'<div class="region" data-type="{btype}" data-bbox="{bbox}" id="{bid}">'
-            f'{inner}'
-            f'</div>'
+            f'<div class="region" data-type="{btype}" data-bbox="{bbox}" '
+            f'id="{bid}"{col_attr}><em>[{btype}]</em></div>'
         )
 
-    if btype == "table-of-contents":
-        return (
-            f'<div class="region toc-block" data-type="{btype}" data-bbox="{bbox}" id="{bid}">'
-            f'{render_toc_block(blk)}'
-            f'</div>'
-        )
-
-    # Footnote bodies get a stable html_id so refs can link to them.
+    # Footnote bodies — use the chandra HTML for typography preservation,
+    # then prefix with the parsed footnote number for the link target.
     if btype == "footnote" and blk.get("_fn"):
         fn = blk["_fn"]
-        body_html = sanitize_inline_html(fn.text).replace("\n", "<br>")
+        rich = blk.get("html") or ""
+        if rich:
+            body_html = sanitize_block_html(rich)
+            # Try to drop the leading "<p>1 " or "<p>1. " so it doesn't
+            # show twice (we'll print the number ourselves).
+            body_html = re.sub(
+                r"^(<p[^>]*>)\s*\d+[.\u00b0)]?\s*",
+                r"\1",
+                body_html,
+                count=1,
+            )
+        else:
+            body_html = sanitize_inline_html(fn.text).replace("\n", "<br>")
         return (
-            f'<div class="region" data-type="{btype}" data-bbox="{bbox}" id="{html.escape(fn.html_id)}">'
+            f'<div class="region" data-type="{btype}" data-bbox="{bbox}" '
+            f'id="{html.escape(fn.html_id)}"{col_attr}>'
             f'<span class="footnote-num">{fn.n}</span> {body_html}'
             f'</div>'
         )
 
-    # Body text — apply footnote-ref linking
-    text_html = _text_with_fn_refs(blk["text"], notes_by_n)
+    # All other block types — TOC, section header, paragraph, table,
+    # list, equation, code, page-header, page-footer, …
+    rich_html = blk.get("html") or ""
+    if rich_html:
+        body = sanitize_block_html(rich_html)
+        # Wire footnote refs into the rich HTML in place
+        if notes_by_n:
+            body = _inject_fn_refs_into_html(body, notes_by_n)
+    else:
+        body = _text_with_fn_refs(blk.get("text", ""), notes_by_n)
+
+    extra_class = ""
+    if btype == "table-of-contents":
+        extra_class = " toc-block"
     return (
-        f'<div class="region" data-type="{btype}" data-bbox="{bbox}" id="{bid}">'
-        f'{text_html}'
-        f'</div>'
+        f'<div class="region{extra_class}" data-type="{btype}" '
+        f'data-bbox="{bbox}" id="{bid}"{col_attr}>{body}</div>'
     )
 
 
@@ -218,29 +402,23 @@ def render_inline_block_html(
     blk,
     notes_by_n: Optional[Dict[int, Footnote]] = None,
 ) -> str:
-    """Render a block as part of the continuous article-reading view."""
+    """Render a block as part of the continuous article-reading view.
+
+    Same strategy as ``render_block_html``: prefer Chandra's rich HTML when
+    we have it (preserves tables, headers, inline emphasis), fall back to
+    the plain-text path otherwise.
+    """
     btype = blk["type"]
     notes_by_n = notes_by_n or {}
-    text = sanitize_inline_html(blk["text"])
 
-    if btype == "section-header":
-        return f'<h2>{text}</h2>'
-    if btype == "caption":
-        return f'<figure><figcaption>{text}</figcaption></figure>'
     if btype == "footnote":
         return ""  # collected separately
     if btype in ("page-header", "page-footer"):
         return ""  # suppress in reading view
-    if btype == "table":
-        return f'<table><tr><td>{text}</td></tr></table>'
-    if btype == "bibliography":
-        items = "".join(
-            f"<li>{sanitize_inline_html(line)}</li>"
-            for line in blk["text"].split("\n") if line.strip()
-        )
-        return f'<ol class="bibl">{items}</ol>'
-    if btype == "table-of-contents":
-        return f'<div class="toc-block">{render_toc_block(blk)}</div>'
+
+    rich_html = blk.get("html") or ""
+
+    # Visual regions — prefer the saved crop; fall back to chandra's HTML.
     if btype in VISUAL_BLOCK_TYPES:
         cap_text = blk.get("text", "") or ""
         cap_html = sanitize_inline_html(cap_text) if cap_text else btype.title()
@@ -253,7 +431,37 @@ def render_inline_block_html(
                 f'<figcaption>{cap_html}</figcaption>'
                 f'</figure>'
             )
+        if rich_html:
+            return f'<figure class="visual-region {btype}">{sanitize_block_html(rich_html)}</figure>'
         return f'<figure><figcaption><em>[{btype}]</em> {cap_html}</figcaption></figure>'
+
+    # All other block types: use chandra's rich HTML when available.
+    if rich_html:
+        body = sanitize_block_html(rich_html)
+        if notes_by_n:
+            body = _inject_fn_refs_into_html(body, notes_by_n)
+        # Suppress the table-of-contents block in the article reading view;
+        # it's already linked from the volume index.
+        if btype == "table-of-contents":
+            return ""
+        return body
+
+    # Plain-text fallback path (older chandra)
+    text = sanitize_inline_html(blk.get("text", ""))
+    if btype == "section-header":
+        return f"<h2>{text}</h2>"
+    if btype == "caption":
+        return f"<figure><figcaption>{text}</figcaption></figure>"
+    if btype == "table":
+        return f"<table><tr><td>{text}</td></tr></table>"
+    if btype == "bibliography":
+        items = "".join(
+            f"<li>{sanitize_inline_html(line)}</li>"
+            for line in blk["text"].split("\n") if line.strip()
+        )
+        return f'<ol class="bibl">{items}</ol>'
+    if btype == "table-of-contents":
+        return ""  # suppress; volume index already has the structured TOC
     if btype == "equation":
         return f'<p class="equation">{text}</p>'
     if btype == "list":
@@ -261,11 +469,10 @@ def render_inline_block_html(
             f"<li>{sanitize_inline_html(line)}</li>"
             for line in blk["text"].split("\n") if line.strip()
         )
-        return f'<ul>{items}</ul>'
+        return f"<ul>{items}</ul>"
 
-    # Default paragraph with footnote-ref linking
-    text_html = _text_with_fn_refs(blk["text"], notes_by_n)
-    return f'<p>{text_html}</p>'
+    text_html = _text_with_fn_refs(blk.get("text", ""), notes_by_n)
+    return f"<p>{text_html}</p>"
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +648,45 @@ def _region_overlay_html(page) -> str:
     return "".join(boxes)
 
 
+def _render_transcription_body(
+    page: dict,
+    notes_by_n: Dict[int, Footnote],
+) -> str:
+    """Render the transcription side of the facsimile view, using a 2-column
+    layout when the page's blocks suggest the original was typeset in two
+    columns."""
+    from ...structure.columns import detect_columns, assign_columns, reading_order
+
+    columns = detect_columns(page)
+    annotated = assign_columns(page, columns)
+    ordered = reading_order(annotated, columns)
+
+    if not columns:
+        # Single-column: just stack everything top-to-bottom
+        return "".join(render_block_html(b, notes_by_n) for b in ordered)
+
+    # Two-column: spanning blocks at the top, then column 0 and column 1
+    parts: List[str] = []
+    spanning = [b for b in ordered if b.get("_column") is None]
+    col_blocks = [
+        [b for b in ordered if b.get("_column") == i]
+        for i in range(len(columns))
+    ]
+    if spanning:
+        parts.append('<div class="trans-span">')
+        for b in spanning:
+            parts.append(render_block_html(b, notes_by_n))
+        parts.append("</div>")
+    parts.append('<div class="trans-columns">')
+    for i, cb in enumerate(col_blocks):
+        parts.append(f'<div class="trans-col" data-col="{i}">')
+        for b in cb:
+            parts.append(render_block_html(b, notes_by_n))
+        parts.append("</div>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def build_page_facsimile_html(
     cfg: VolumeConfig,
     page: dict,
@@ -453,7 +699,7 @@ def build_page_facsimile_html(
     next_p = pages[idx + 1] if idx is not None and idx + 1 < len(pages) else None
 
     notes_by_n = notes_by_n_by_page.get(pn, {})
-    blocks_html = "".join(render_block_html(b, notes_by_n) for b in page["blocks"])
+    blocks_html = _render_transcription_body(page, notes_by_n)
     overlay_html = _region_overlay_html(page)
 
     nav_prev = (
@@ -466,11 +712,11 @@ def build_page_facsimile_html(
     body = f'''
 <section class="facsimile-view">
   <div class="facsimile">
-    <div class="facsimile-stage" data-show-regions="off">
+    <div class="facsimile-stage" data-show-regions="on">
       <img class="facsimile-img" src="../pages-img/{page["image_filename"]}" alt="Page {pn} facsimile">
       <div class="region-overlay">{overlay_html}</div>
-      <button class="region-toggle" type="button" aria-pressed="false"
-              aria-label="Toggle layout regions">Show regions</button>
+      <button class="region-toggle" type="button" aria-pressed="true"
+              aria-label="Toggle layout regions">Hide regions</button>
     </div>
   </div>
   <div class="transcription">

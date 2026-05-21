@@ -84,21 +84,79 @@ def _coerce_btype(btype_raw) -> str:
             or str(btype_raw))
 
 
+def _html_to_text(html_content: str) -> str:
+    """Strip HTML tags from a Chandra LayoutBlock's ``content`` field,
+    returning a plain-text equivalent suitable for TEI/PageXML/graph output.
+    ``<br>`` becomes a newline; everything else is whitespace-separated."""
+    if not html_content:
+        return ""
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        # bs4 ships with chandra-ocr but if it's somehow absent, fall back
+        # to a regex tag stripper.
+        import re
+        text = re.sub(r"<br\s*/?>", "\n", html_content, flags=re.I)
+        text = re.sub(r"<[^>]+>", "", text)
+        return text.strip()
+    soup = BeautifulSoup(html_content, "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    return soup.get_text(separator=" ").strip()
+
+
 def _extract_blocks(layout_blocks, page_num: int) -> List[dict]:
+    """Convert Chandra LayoutBlock objects to our internal block dicts.
+
+    Chandra 2's ``LayoutBlock`` has three fields::
+
+        label:   "Section-Header" / "Table-Of-Contents" / "Picture" / ...
+        bbox:    [x1, y1, x2, y2] in pixel coords
+        content: rich HTML fragment ("<h2>INHALT</h2>", "<table>...</table>")
+
+    Older chandra versions used ``block_type`` and ``text`` — we fall back
+    to those for compatibility, but the modern path is via ``label`` and
+    ``content``.
+    """
     blocks: List[dict] = []
     for i, b in enumerate(layout_blocks):
-        btype_raw = (getattr(b, "block_type", None) or getattr(b, "type", None)
-                     or (b.get("type") if isinstance(b, dict) else None) or "text")
+        # Type — Chandra 2 puts it on ``label``; older releases on ``block_type``/``type``.
+        btype_raw = (getattr(b, "label", None)
+                     or getattr(b, "block_type", None)
+                     or getattr(b, "type", None)
+                     or (b.get("label") if isinstance(b, dict) else None)
+                     or (b.get("type") if isinstance(b, dict) else None)
+                     or "text")
         btype = _coerce_btype(btype_raw)
+
+        # Bbox — same shape in every chandra version.
         bbox = (getattr(b, "bbox", None)
-                or (b.get("bbox") if isinstance(b, dict) else None) or [0, 0, 0, 0])
-        text = (getattr(b, "text", None) or getattr(b, "content", None)
-                or (b.get("text") if isinstance(b, dict) else None) or "")
+                or (b.get("bbox") if isinstance(b, dict) else None)
+                or [0, 0, 0, 0])
+
+        # Content — Chandra 2 returns HTML on ``content``; older versions had
+        # plain text on ``text``. We preserve both: ``html`` is the rich
+        # fragment (so the HTML emitter can show tables/headers natively),
+        # ``text`` is the stripped plain text (for TEI/PageXML/graph).
+        content_html = (getattr(b, "content", None)
+                        or (b.get("content") if isinstance(b, dict) else None)
+                        or "")
+        plain_text = (getattr(b, "text", None)
+                      or (b.get("text") if isinstance(b, dict) else None)
+                      or "")
+        if content_html and not plain_text:
+            plain_text = _html_to_text(content_html)
+        elif plain_text and not content_html:
+            # Older chandra: synthesise minimal HTML so downstream code path is uniform.
+            import html as _html
+            content_html = f"<p>{_html.escape(plain_text)}</p>"
+
         blocks.append({
             "id":   f"p{page_num}_b{i + 1:03d}",
             "type": str(btype).lower().replace("_", "-"),
             "bbox": [float(x) for x in bbox] if bbox else [0, 0, 0, 0],
-            "text": str(text),
+            "text": str(plain_text),
+            "html": str(content_html),
         })
     return blocks
 
@@ -141,10 +199,12 @@ def ocr_page(
     blocks = []
     if parse_layout is not None and raw:
         try:
+            # Chandra 2 signature: parse_layout(html: str, image, bbox_scale=1000)
             layout_blocks = parse_layout(raw, img)
         except TypeError:
+            # Some chandra versions use keyword args
             try:
-                layout_blocks = parse_layout(raw, image=img)
+                layout_blocks = parse_layout(html=raw, image=img)
             except Exception as e:
                 layout_blocks = []
                 print(f"  parse_layout failed on page {pn}: {e}")
