@@ -179,20 +179,6 @@ This deduplicates nodes by IRI. Cross-volume authors land in a single
 The output is a valid JSON-LD document loadable into Apache Jena, rdflib,
 GraphDB, neosemantics, or anything else that speaks RDF.
 
-### What to add next
-
-The current graph covers the *structural* facts. Natural next steps:
-
-- **NER** to add `mentions` edges from articles to people/places/works.
-  Spacy + a German model would be a good baseline; the OCR text is
-  already cleaned and structured by article in `output/<slug>/logs/`.
-- **Bibliography parsing** of the `bibliography` block type to turn
-  citations into `CreativeWork` nodes the article `cites`.
-- **Reading-order normalisation** for multi-column pages — Chandra
-  returns blocks but their order isn't always natural reading order.
-  This is a known gap; see `pjb_pipeline.structure.articles` for where
-  to plug in a column-aware sorter.
-
 ---
 
 ## Tests
