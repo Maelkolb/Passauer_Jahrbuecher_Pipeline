@@ -12,9 +12,6 @@ page and article structure, and emits five artefacts:
 | HTML       | `html/`       | Static site: cover, TOC, article view, facsimile view   |
 | **JSON-LD**| `graph/`      | **Knowledge-graph fragment for the 50-volume corpus**   |
 
-End goal: process all ~50 volumes with the same pipeline and merge their
-JSON-LD graphs into a single corpus-wide knowledge graph where articles,
-authors, sections, and volumes are nodes you can query.
 
 
 ## Install
@@ -85,11 +82,6 @@ See the notebook for the working version including Drive mount.
 
 ---
 
-## Run on your GPU host (vLLM server)
-
-You said you already have vLLM serving Chandra. Two ways to use it from
-this codebase:
-
 ### Option A — run the pipeline on the GPU host
 
 ```bash
@@ -106,9 +98,6 @@ pip install -e ".[vllm]"
 pjb-pipeline run configs/pjb-048-2006.yaml
 ```
 
-The pipeline talks to vLLM over HTTP, so no model is loaded into the
-pipeline process — the OCR call is just a request. The whole pipeline
-fits comfortably on a CPU-only box for everything except OCR.
 
 ### Option B — run the pipeline elsewhere, hit vLLM remotely
 
@@ -213,11 +202,6 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-The tests cover the structure parsers (TOC, footnotes, article
-detection) on small handcrafted examples — they're cheap to run and the
-most useful place to catch regressions.
-
----
 
 ## License
 
