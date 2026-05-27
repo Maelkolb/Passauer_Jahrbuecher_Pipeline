@@ -81,8 +81,58 @@ def test_reading_order_two_columns():
     cols = detect_columns(page)
     annotated = assign_columns(page, cols)
     ordered = reading_order(annotated, cols)
-    # Expected: spanning first by y (a, f), then left col by y (b, d), then right col by y (c, e)
-    assert [b["id"] for b in ordered] == ["a", "f", "b", "d", "c", "e"]
+    # Band layout: the section-header "a" is above all body blocks, the
+    # page-footer "f" is below all of them. So the natural reading order
+    # walks the body left column (b, d), then right column (c, e), with
+    # the spanning header at the top and the spanning footer at the end.
+    assert [b["id"] for b in ordered] == ["a", "b", "d", "c", "e", "f"]
+
+
+def test_reading_order_interleaves_mid_page_spanning_block():
+    # A section-header that appears in the middle of a 2-column page
+    # should split the columns into a band above it and a band below it.
+    page = {
+        "image_width": 1400,
+        "image_height": 2000,
+        "blocks": [
+            _block("top",      "text",           [100,  100,  650,  600]),
+            _block("topR",     "text",           [750,  100, 1300,  600]),
+            _block("midHdr",   "section-header", [100,  700, 1300,  800]),
+            _block("bot",      "text",           [100,  900,  650, 1500]),
+            _block("botR",     "text",           [750,  900, 1300, 1500]),
+        ],
+    }
+    cols = detect_columns(page)
+    assert len(cols) == 2
+    annotated = assign_columns(page, cols)
+    ordered = reading_order(annotated, cols)
+    # Within the upper band: left column ("top") then right column ("topR").
+    # Then the spanning header. Then the lower band: bot, botR.
+    assert [b["id"] for b in ordered] == ["top", "topR", "midHdr", "bot", "botR"]
+
+
+def test_band_layout_groups_spanning_at_mid_page():
+    from pjb_pipeline.structure.columns import band_layout
+    page = {
+        "image_width": 1400,
+        "image_height": 2000,
+        "blocks": [
+            _block("top",    "text",           [100, 100,  650, 600]),
+            _block("topR",   "text",           [750, 100, 1300, 600]),
+            _block("midHdr", "section-header", [100, 700, 1300, 800]),
+            _block("bot",    "text",           [100, 900,  650, 1500]),
+            _block("botR",   "text",           [750, 900, 1300, 1500]),
+        ],
+    }
+    cols = detect_columns(page)
+    annotated = assign_columns(page, cols)
+    bands = band_layout(annotated, cols)
+    # Expect: columns band (upper), spanning band (midHdr), columns band (lower)
+    kinds = [k for k, _ in bands]
+    assert kinds == ["columns", "spanning", "columns"]
+    assert {b["id"] for b in bands[0][1]} == {"top", "topR"}
+    assert [b["id"] for b in bands[1][1]] == ["midHdr"]
+    assert {b["id"] for b in bands[2][1]} == {"bot", "botR"}
 
 
 def test_reading_order_single_column():

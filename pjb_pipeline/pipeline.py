@@ -15,6 +15,7 @@ from . import render, ocr, normalize
 from .config import VolumeConfig
 from .emit import pagexml, tei, graph
 from .emit.html import renderers as html_renderers
+from .emit.html.crops import make_region_crops
 from .stage import stage, format_report
 from .structure.articles import detect_articles
 from .structure.footnotes import link_article_footnotes
@@ -86,6 +87,13 @@ def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
 
     with stage("Emit TEI-XML", timings):
         tei.run(cfg, articles, unified, toc=toc)
+
+    with stage("Crop visual regions", timings):
+        # Promoted from the HTML stage so the JSON-LD graph can reference
+        # the cropped figure/image/diagram files as ImageObject nodes.
+        # Annotates each visual block with ``_crop`` and ``_crop_url``.
+        n_crops = make_region_crops(cfg, unified)
+        print(f"   {n_crops} visual region crops written to {cfg.regions_dir}")
 
     with stage("Emit knowledge graph (JSON-LD)", timings):
         graph.run(

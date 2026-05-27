@@ -7,6 +7,7 @@ page and article structure, and emits five artefacts:
 | Artefact   | Format        | Purpose                                                 |
 | ---------- | ------------- | ------------------------------------------------------- |
 | Page PNGs  | `pages/`      | High-DPI rendered scans                                 |
+| Regions    | `regions/`    | Cropped figure/image/diagram PNGs (one per visual block) |
 | PageXML    | `pagexml/`    | PRImA 2019 schema, one file per page, region polygons   |
 | TEI-XML    | `tei/`        | One file per volume, articles + facsimile + footnotes   |
 | HTML       | `html/`       | Static site: cover, TOC, article view, facsimile view   |
@@ -162,10 +163,13 @@ schema (in JSON-LD, schema.org-flavoured):
 | `PublicationSeries` | `pjb:series/passauer-jahrbuecher`                     | Same in every volume — merges trivially                     |
 | `PublicationVolume` | `pjb:vol/pjb-048-2006`                                | One per volume                                              |
 | `CreativeWorkSeason`| `pjb:vol/<slug>/section/<section-slug>`               | One per TOC section (Aufsätze, Berichte, …)                 |
-| `ScholarlyArticle`  | `pjb:art/<slug>-art<NN>`                              | One per detected article                                    |
-| `WebPage`           | `pjb:vol/<slug>/page/<NNNN>`                          | One per processed page                                      |
+| `ScholarlyArticle`  | `pjb:art/<slug>-art<NN>`                              | One per detected article; carries `hasPart` → its pages     |
+| `WebPage`           | `pjb:vol/<slug>/page/<NNNN>`                          | One per processed page; `inArticle` (or `inVolume` for frontmatter); `hasPart` → its figures |
+| `ImageObject`       | `pjb:vol/<slug>/page/<NNNN>/figure/<block-id>`        | One per figure/image/diagram region; `inPage` → its page; `contentUrl` → `regions/<block-id>.png` |
 | `Person`            | `pjb:person/<slugified-name>`                         | **Stable across volumes**: same author → same IRI           |
-| `Comment`           | `pjb:art/<art-id>/fn/<n>`                             | Footnotes                                                   |
+| `Comment`           | `pjb:art/<art-id>/fn/<n>`                             | Footnotes; `footnoteOf` → article, `inPage` → page          |
+
+So the graph forms the chain **Series → Volume → Article → Page → {Figure, Footnote}** with bidirectional links (`hasPart` / `isPartOf`-style predicates) at each level.
 
 To get the corpus-wide graph, run after all volumes have been processed:
 

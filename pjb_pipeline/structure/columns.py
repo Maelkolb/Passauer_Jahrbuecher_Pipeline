@@ -39,6 +39,7 @@ def detect_columns(
     *,
     min_blocks_per_column: int = 2,
     width_threshold: float = 0.6,
+    min_gap_ratio: float = 0.06,
 ) -> List[Tuple[int, int]]:
     """Detect column ranges on a page.
 
@@ -47,6 +48,17 @@ def detect_columns(
 
     ``width_threshold`` is the maximum fraction of page width a block can
     occupy and still count as "in a column" (anything wider is spanning).
+
+    ``min_gap_ratio`` controls how clear the gutter between the two columns
+    must be (as a fraction of page width) before we trust the detection.
+    Pages whose body blocks are evenly distributed across the page width
+    won't pass this and fall back to single-column rendering.
+
+    The midline between the two columns is determined dynamically by
+    finding the *largest gap* in the sorted block-centre positions, rather
+    than naively assuming ``W/2``. This makes the detector robust to pages
+    where the columns are offset, asymmetric, or where one column is
+    physically narrower than the other.
     """
     blocks = page.get("blocks", [])
     if not blocks:
@@ -70,8 +82,25 @@ def detect_columns(
     if len(candidates) < min_blocks_per_column * 2:
         return []
 
-    # Group by centre x position into left vs right half.
-    midline = W / 2
+    # Find the natural gutter between the two columns by looking at the
+    # largest gap between sorted block-centre positions. Fall back to W/2
+    # if no obvious gap exists.
+    centres = sorted((b["bbox"][0] + b["bbox"][2]) / 2 for b in candidates)
+    best_gap_size = 0.0
+    best_gap_mid = W / 2
+    for i in range(1, len(centres)):
+        gap = centres[i] - centres[i - 1]
+        if gap > best_gap_size:
+            best_gap_size = gap
+            best_gap_mid = (centres[i] + centres[i - 1]) / 2
+
+    # Need a clear gutter (in page-width terms) to call this a 2-column
+    # page. Loosely-laid-out single-column pages can have a small gap by
+    # accident and shouldn't be promoted.
+    if best_gap_size < W * min_gap_ratio:
+        return []
+
+    midline = best_gap_mid
     left = [b for b in candidates if ((b["bbox"][0] + b["bbox"][2]) / 2) < midline]
     right = [b for b in candidates if ((b["bbox"][0] + b["bbox"][2]) / 2) >= midline]
 
@@ -84,6 +113,13 @@ def detect_columns(
     left_end    = max(b["bbox"][2] for b in left)
     right_start = min(b["bbox"][0] for b in right)
     right_end   = max(b["bbox"][2] for b in right)
+
+    # Final sanity check: the two column ranges must not overlap
+    # horizontally — otherwise the "columns" are likely artefacts of a
+    # noisy layout pass.
+    if left_end > right_start:
+        return []
+
     return [(int(left_start), int(left_end)), (int(right_start), int(right_end))]
 
 
@@ -115,6 +151,21 @@ def assign_columns(page: dict, columns: List[Tuple[int, int]]) -> List[dict]:
             out.append({**b, "_column": None})
             continue
 
+        # A narrow block that nonetheless straddles both detected columns
+        # is still spanning. We check by horizontal overlap: if the block
+        # overlaps significantly with each column's range (more than 30%
+        # of the block's own width in each), call it spanning. This
+        # catches things like wide figures or pull-quotes that sit between
+        # the columns.
+        if len(columns) == 2:
+            (l_start, l_end), (r_start, r_end) = columns
+            block_width = max(1, x2 - x1)
+            l_ov = max(0, min(x2, l_end) - max(x1, l_start))
+            r_ov = max(0, min(x2, r_end) - max(x1, r_start))
+            if l_ov >= block_width * 0.3 and r_ov >= block_width * 0.3:
+                out.append({**b, "_column": None})
+                continue
+
         # Otherwise assign by centre-x to the nearest column
         cx = (x1 + x2) / 2
         # Distance from centre-x to each column's centre
@@ -133,40 +184,111 @@ def assign_columns(page: dict, columns: List[Tuple[int, int]]) -> List[dict]:
 def reading_order(blocks: List[dict], columns: List[Tuple[int, int]]) -> List[dict]:
     """Sort blocks into natural reading order.
 
-    For a two-column page::
+    For a two-column page we now use a *band* layout: spanning blocks
+    (section headers, page header/footer, wide figures) act as horizontal
+    separators that split the page vertically. Inside each band, blocks
+    are read column-by-column, top-to-bottom. The reading sequence is::
 
-        spanning blocks (in y order) at the top of their "section",
-        then column 0 top-to-bottom,
-        then column 1 top-to-bottom
+        [column-0 of band 1, column-1 of band 1, spanning block 1,
+         column-0 of band 2, column-1 of band 2, spanning block 2, …]
+
+    This preserves the vertical position of section headers (and other
+    spanning regions) instead of forcing them all to the top of the page.
 
     For a single-column page::
 
         plain top-to-bottom
-
-    We don't try to interleave a spanning header *between* two paragraphs in
-    the same column — that would require finding the y-level where each
-    column "owns" the page, which is a deeper problem. Spanning blocks come
-    first; column blocks follow. Good enough for the digital edition.
     """
     if not columns:
         return sorted(blocks, key=lambda b: b["bbox"][1])
 
-    spanning = [b for b in blocks if b.get("_column") is None]
-    col_blocks: List[List[dict]] = [[] for _ in columns]
-    for b in blocks:
-        col = b.get("_column")
-        if col is None:
-            continue
-        if 0 <= col < len(columns):
-            col_blocks[col].append(b)
+    n_cols = len(columns)
 
-    # Sort each column by y
-    for col in col_blocks:
-        col.sort(key=lambda b: b["bbox"][1])
-    spanning.sort(key=lambda b: b["bbox"][1])
+    spanning = sorted(
+        (b for b in blocks if b.get("_column") is None),
+        key=lambda b: b["bbox"][1],
+    )
+    columnar = sorted(
+        (b for b in blocks if b.get("_column") is not None),
+        key=lambda b: b["bbox"][1],
+    )
 
-    # Spanning first, then columns left-to-right
-    out = list(spanning)
-    for col in col_blocks:
-        out.extend(col)
+    out: List[dict] = []
+    col_cursor = 0
+    for spn in spanning:
+        spn_y = spn["bbox"][1]
+        # Collect all column blocks whose top edge is above this spanning
+        # block — they belong to the band sitting *above* it.
+        band: List[dict] = []
+        while (
+            col_cursor < len(columnar)
+            and columnar[col_cursor]["bbox"][1] < spn_y
+        ):
+            band.append(columnar[col_cursor])
+            col_cursor += 1
+        # Emit the band column-by-column, then the spanning block itself.
+        for i in range(n_cols):
+            for b in band:
+                if b.get("_column") == i:
+                    out.append(b)
+        out.append(spn)
+
+    # Trailing column blocks below the last spanning block.
+    trailing = columnar[col_cursor:]
+    for i in range(n_cols):
+        for b in trailing:
+            if b.get("_column") == i:
+                out.append(b)
+
+    return out
+
+
+def band_layout(
+    blocks: List[dict],
+    columns: List[Tuple[int, int]],
+) -> List[Tuple[str, List[dict]]]:
+    """Group blocks into alternating bands for layout rendering.
+
+    Returns a list of ``(kind, blocks)`` tuples where ``kind`` is either
+    ``"columns"`` (a band of multi-column content; ``blocks`` carry the
+    ``_column`` annotation) or ``"spanning"`` (a single full-width block).
+
+    The output is what an HTML renderer needs to emit a faithful
+    reconstruction of the original layout — spanning blocks slot in at
+    their natural y position instead of all being grouped at the top.
+
+    For a single-column (or columns-less) page, returns a single
+    ``("columns", blocks)`` band with the blocks sorted top-to-bottom.
+    """
+    if not columns:
+        return [("columns", sorted(blocks, key=lambda b: b["bbox"][1]))]
+
+    spanning = sorted(
+        (b for b in blocks if b.get("_column") is None),
+        key=lambda b: b["bbox"][1],
+    )
+    columnar = sorted(
+        (b for b in blocks if b.get("_column") is not None),
+        key=lambda b: b["bbox"][1],
+    )
+
+    out: List[Tuple[str, List[dict]]] = []
+    col_cursor = 0
+    for spn in spanning:
+        spn_y = spn["bbox"][1]
+        band: List[dict] = []
+        while (
+            col_cursor < len(columnar)
+            and columnar[col_cursor]["bbox"][1] < spn_y
+        ):
+            band.append(columnar[col_cursor])
+            col_cursor += 1
+        if band:
+            out.append(("columns", band))
+        out.append(("spanning", [spn]))
+
+    trailing = columnar[col_cursor:]
+    if trailing:
+        out.append(("columns", trailing))
+
     return out

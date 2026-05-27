@@ -79,6 +79,7 @@ class Footnote:
     n:          int
     text:       str
     html_id:    str           # the anchor id used in HTML output
+    page_num:   Optional[int] = None   # PDF page this footnote sits on
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -121,6 +122,7 @@ def collect_article_footnotes(article: dict) -> List[Footnote]:
                 n=n,
                 text=body,
                 html_id=f"fn-{article['id']}-{n}",
+                page_num=p.get("page_num"),
             ))
             seq += 1
     return notes

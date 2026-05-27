@@ -184,6 +184,16 @@ class VolumeConfig:
         return self.out_dir / "graph"
 
     @property
+    def regions_dir(self) -> Path:
+        """Cropped visual regions (figures, images, diagrams).
+
+        Lives at the volume root, alongside ``pages/``, so the crops are a
+        first-class artifact that the JSON-LD graph and the HTML edition
+        can both reference from a stable location.
+        """
+        return self.out_dir / "regions"
+
+    @property
     def logs_dir(self) -> Path:
         return self.out_dir / "logs"
 
@@ -191,6 +201,6 @@ class VolumeConfig:
         for d in (
             self.out_dir, self.pages_dir, self.interim_dir,
             self.pagexml_dir, self.tei_dir, self.html_dir,
-            self.graph_dir, self.logs_dir,
+            self.graph_dir, self.regions_dir, self.logs_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)

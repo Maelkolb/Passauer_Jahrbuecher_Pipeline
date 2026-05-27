@@ -332,7 +332,7 @@ def render_block_html(
         rich_html = blk.get("html") or ""
         rich_html = sanitize_block_html(rich_html)
         if blk.get("_crop"):
-            rel = f"../{REGIONS_DIR_NAME}/{blk['_crop']}"
+            rel = f"../../{REGIONS_DIR_NAME}/{blk['_crop']}"
             cap_text = blk.get("text", "") or ""
             alt = alt_text(cap_text) or html_escape(btype)
             inner = f'<img src="{rel}" alt="{alt}" loading="lazy">'
@@ -354,23 +354,27 @@ def render_block_html(
             f'id="{bid}"{col_attr}><em>[{btype}]</em></div>'
         )
 
-    # Footnote bodies — use the chandra HTML for typography preservation,
-    # then prefix with the parsed footnote number for the link target.
+    # Footnote bodies — use the chandra HTML for typography preservation.
+    # Chandra's rich HTML already contains the footnote number as part of
+    # the transcribed text (e.g. "<p>1. ...</p>"); previous versions of
+    # this renderer *also* prepended our own ``<span class="footnote-num">``
+    # element, which caused every footnote to be numbered twice. We now
+    # trust Chandra's numbering when rich HTML is available and only
+    # synthesise our own marker on the plain-text fallback path (where
+    # ``fn.text`` has the leading number stripped by
+    # ``parse_footnote_body``).
     if btype == "footnote" and blk.get("_fn"):
         fn = blk["_fn"]
         rich = blk.get("html") or ""
         if rich:
             body_html = sanitize_block_html(rich)
-            # Try to drop the leading "<p>1 " or "<p>1. " so it doesn't
-            # show twice (we'll print the number ourselves).
-            body_html = re.sub(
-                r"^(<p[^>]*>)\s*\d+[.\u00b0)]?\s*",
-                r"\1",
-                body_html,
-                count=1,
+            return (
+                f'<div class="region" data-type="{btype}" data-bbox="{bbox}" '
+                f'id="{html.escape(fn.html_id)}"{col_attr}>'
+                f'{body_html}'
+                f'</div>'
             )
-        else:
-            body_html = sanitize_inline_html(fn.text).replace("\n", "<br>")
+        body_html = sanitize_inline_html(fn.text).replace("\n", "<br>")
         return (
             f'<div class="region" data-type="{btype}" data-bbox="{bbox}" '
             f'id="{html.escape(fn.html_id)}"{col_attr}>'
@@ -424,7 +428,7 @@ def render_inline_block_html(
         cap_html = sanitize_inline_html(cap_text) if cap_text else btype.title()
         alt = alt_text(cap_text) or html_escape(btype)
         if blk.get("_crop"):
-            rel = f"../{REGIONS_DIR_NAME}/{blk['_crop']}"
+            rel = f"../../{REGIONS_DIR_NAME}/{blk['_crop']}"
             return (
                 f'<figure class="visual-region {btype}">'
                 f'<img src="{rel}" alt="{alt}" loading="lazy">'
@@ -654,36 +658,51 @@ def _render_transcription_body(
 ) -> str:
     """Render the transcription side of the facsimile view, using a 2-column
     layout when the page's blocks suggest the original was typeset in two
-    columns."""
-    from ...structure.columns import detect_columns, assign_columns, reading_order
+    columns.
+
+    When the page has a mix of column blocks and spanning blocks (section
+    headers, page header/footer, wide figures), we use a *band* layout:
+    each band of column content gets its own ``<div class="trans-columns">``
+    grid, and spanning blocks slot in at their original vertical position
+    between two such bands. That way a section header in the middle of the
+    page stays in the middle, instead of being pinned to the top.
+    """
+    from ...structure.columns import (
+        detect_columns, assign_columns, band_layout,
+    )
 
     columns = detect_columns(page)
     annotated = assign_columns(page, columns)
-    ordered = reading_order(annotated, columns)
 
     if not columns:
         # Single-column: just stack everything top-to-bottom
+        ordered = sorted(annotated, key=lambda b: b["bbox"][1])
         return "".join(render_block_html(b, notes_by_n) for b in ordered)
 
-    # Two-column: spanning blocks at the top, then column 0 and column 1
+    n_cols = len(columns)
     parts: List[str] = []
-    spanning = [b for b in ordered if b.get("_column") is None]
-    col_blocks = [
-        [b for b in ordered if b.get("_column") == i]
-        for i in range(len(columns))
-    ]
-    if spanning:
-        parts.append('<div class="trans-span">')
-        for b in spanning:
-            parts.append(render_block_html(b, notes_by_n))
-        parts.append("</div>")
-    parts.append('<div class="trans-columns">')
-    for i, cb in enumerate(col_blocks):
-        parts.append(f'<div class="trans-col" data-col="{i}">')
-        for b in cb:
-            parts.append(render_block_html(b, notes_by_n))
-        parts.append("</div>")
-    parts.append("</div>")
+    for kind, band_blocks in band_layout(annotated, columns):
+        if kind == "spanning":
+            parts.append('<div class="trans-span">')
+            for b in band_blocks:
+                parts.append(render_block_html(b, notes_by_n))
+            parts.append("</div>")
+        else:  # "columns"
+            col_groups: List[List[dict]] = [[] for _ in range(n_cols)]
+            for b in band_blocks:
+                col = b.get("_column")
+                if col is None or not (0 <= col < n_cols):
+                    # Defensive: shouldn't happen since band_layout already
+                    # separated spanning blocks out.
+                    continue
+                col_groups[col].append(b)
+            parts.append('<div class="trans-columns">')
+            for i, cb in enumerate(col_groups):
+                parts.append(f'<div class="trans-col" data-col="{i}">')
+                for b in cb:
+                    parts.append(render_block_html(b, notes_by_n))
+                parts.append("</div>")
+            parts.append("</div>")
     return "".join(parts)
 
 
@@ -721,7 +740,6 @@ def build_page_facsimile_html(
   </div>
   <div class="transcription">
     <div class="page-header">
-      <div class="page-num">{pn}</div>
       <div class="page-loc">facsimile + transcription</div>
     </div>
     {blocks_html}

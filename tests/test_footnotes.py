@@ -101,6 +101,10 @@ class TestLinkArticleFootnotes:
         assert notes[0].n == 1
         assert notes[1].n == 2
         assert "First footnote" in notes[0].text
+        # Each footnote should remember which page it sat on, so the
+        # graph emitter can link it back to its page node.
+        assert notes[0].page_num == 1
+        assert notes[1].page_num == 1
 
     def test_links_refs_to_notes(self):
         article = self._make_article()

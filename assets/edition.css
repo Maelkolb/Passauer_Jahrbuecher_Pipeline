@@ -1110,3 +1110,66 @@ figure.visual-region figcaption {
   /* Stay subtle until hover so the page isn't a wall of labels */
   opacity: 0.65;
 }
+
+/* ============================================================
+   Justified block text
+   --------------------------------------------------------------
+   The original printed edition is set in fully-justified blocks;
+   the digital edition should match. We apply ``text-align:
+   justify`` to the article reading view and to running-text
+   regions in the per-page transcription. Headings, captions,
+   footnotes, figures, and other non-running-text regions are
+   excluded so they keep their natural alignment.
+   ============================================================ */
+
+/* Article reading view — body paragraphs */
+.article-body,
+.article-body p {
+  text-align: justify;
+  text-justify: inter-word;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+}
+
+/* Per-page transcription — running text regions and any <p>
+   inside them. Section headers, captions, footnotes, page
+   header/footer, figures etc. all opt out via more specific
+   selectors below. */
+.transcription .region[data-type="text"],
+.transcription .region[data-type="paragraph"],
+.transcription .region[data-type="text"] p,
+.transcription .region[data-type="paragraph"] p {
+  text-align: justify;
+  text-justify: inter-word;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+}
+
+/* Opt-outs: keep these regions left/centre aligned even inside
+   a justified-by-default context. */
+.transcription .region[data-type="section-header"],
+.transcription .region[data-type="section-header"] *,
+.transcription .region[data-type="caption"],
+.transcription .region[data-type="caption"] *,
+.transcription .region[data-type="footnote"],
+.transcription .region[data-type="footnote"] p,
+.transcription .region[data-type="page-header"],
+.transcription .region[data-type="page-header"] *,
+.transcription .region[data-type="page-footer"],
+.transcription .region[data-type="page-footer"] *,
+.transcription .region[data-type="figure"],
+.transcription .region[data-type="image"],
+.transcription .region[data-type="diagram"] {
+  text-align: initial;
+}
+
+/* Article body opt-outs (headings, figures, page-break markers
+   keep their existing centred or styled alignment). */
+.article-body h1, .article-body h2, .article-body h3, .article-body h4,
+.article-body figure, .article-body figcaption,
+.article-body .pb {
+  text-align: initial;
+}
+.article-body figure { text-align: center; }
+.article-body figcaption { text-align: center; }
+.article-body .pb { text-align: center; }
