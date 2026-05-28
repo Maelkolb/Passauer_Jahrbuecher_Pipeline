@@ -122,15 +122,18 @@ def _render_agent_section(name: str, existing: Dict[str, str]) -> str:
 _SKIP_TYPES = {"page-header", "page-footer", "table-of-contents"}
 
 
-def _figure_md(blk: dict, alt: str) -> str:
+def _figure_md(blk: dict, label: str) -> str:
     """Inline image reference for a figure block.
 
     The image path is relative to the *article* markdown file's location
     (``wiki/articles/<art>.md``), which is two levels deep from the volume
     root, so we hop up two directories to reach ``regions/``.
     """
-    fname = (blk.get("_crop") or f"{blk['id']}.png")
-    return f"![{alt}](../../regions/{fname})\n"
+    desc = (blk.get("text") or "").strip()
+    body = f"> **[{label} · {blk['id']}]**"
+    if desc:
+        body += f" {desc}"
+    return body + "\n"
 
 
 def _block_to_md(blk: dict) -> str:
@@ -148,8 +151,7 @@ def _block_to_md(blk: dict) -> str:
     if btype == "caption":
         return f"*{text}*\n\n" if text else ""
     if btype in VISUAL_BLOCK_TYPES:  # figure / image / diagram
-        alt = text or btype
-        return _figure_md(blk, alt) + "\n"
+        return _figure_md(blk, btype.capitalize()) + "\n"
     if btype == "table":
         # Chandra often supplies HTML for tables; fall back to text.
         html = (blk.get("html") or "").strip()

@@ -1,0 +1,55 @@
+# Copy this file for each new volume — only the top half typically changes.
+
+# --- Source ----------------------------------------------------------
+pdf_path: "/home/tobias/2026-05-05_17-36_L_2008_finished/pdf/2026-05-05_17-36_L_2008.pdf"
+volume_number: 50
+volume_number_roman: "L"
+volume_year: 2008
+
+# --- Bibliographic metadata ------------------------------------------
+volume_title: "Passauer Jahrbuch"
+volume_subtitle: "Beitraege zur Geschichte und Kultur Ostbaierns"
+publisher: "Verein fuer Ostbairische Heimatforschung"
+editor: "Institut fuer Kulturraumforschung Ostbaierns und der Nachbarregionen"
+language: "de"
+series_name: "Passauer Jahrbuecher"
+
+# --- Output (also override-able with --output-root on the CLI) -------
+output_root: "./output"
+
+# --- Rendering -------------------------------------------------------
+render_dpi: 200
+# Pages to process, 1-indexed inclusive. Set to ~null to process the whole book.
+# Use this for testing: small range = small bill.
+page_range: null
+
+# Set this if you know the offset between PDF page indices and printed
+# page numbers; leave null and the pipeline will try to infer it from
+# page-header text.
+printed_page_offset: null
+
+# --- OCR backend -----------------------------------------------------
+# method: "hf"   — load Chandra into local GPU memory (the Colab path)
+# method: "vllm" — talk to a vLLM server. Set vllm_url for a remote one;
+#                  leave it null when vLLM is running on localhost:8000.
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"   # e.g. "http://your-gpu-box:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1
+
+# --- Structure detection ---------------------------------------------
+# Uppercase headings used by Passauer Jahrbücher to group the TOC.
+# Add any new ones a volume introduces.
+toc_section_labels:
+  - "AUFSÄTZE"
+  - "BERICHTE"
+  - "REZENSIONEN"
+  - "BUCHBESPRECHUNGEN"
+  - "BIBLIOGRAPHIE"
+  - "NACHRUFE"
+  - "VEREINSCHRONIK"
+  - "MITARBEITER"
+
+# --- Misc ------------------------------------------------------------
+crop_regions: true

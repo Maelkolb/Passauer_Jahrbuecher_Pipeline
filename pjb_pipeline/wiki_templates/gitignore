@@ -1,0 +1,5 @@
+regions/
+.DS_Store
+Thumbs.db
+*.swp
+.obsidian/workspace*

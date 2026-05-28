@@ -53,7 +53,7 @@ SERIES_DEFAULTS = {
 # future NER-driven content (places/topics).
 WIKI_SUBDIRS = (
     "articles", "people", "volumes", "sections",
-    "places", "topics", "regions", "_graph",
+    "places", "topics", "_graph",
 )
 
 
@@ -89,6 +89,7 @@ def init_wiki(wiki_root: Path, *, force: bool = False) -> None:
     # Templated docs
     _copy_template(wiki_root / "CLAUDE.md", "CLAUDE.md")
     _copy_template(wiki_root / "README.md", "README.md")
+    _copy_template(wiki_root / ".gitignore", "gitignore")
 
     # Empty corpus graph — just the Series node, so the graph file is
     # never genuinely empty (RDF tools dislike empty @graph arrays).
@@ -212,9 +213,6 @@ def add_volume(wiki_root: Path, volume_output_root: Path) -> None:
     # 3) Copy article pages (with figure-path rewrites)
     n_articles = _copy_article_mds(wiki_root, src_wiki, slug)
 
-    # 4) Copy the region crops, namespaced by slug
-    n_regions = _copy_regions(wiki_root, vol_root, slug)
-
     # 5) Merge person pages
     n_people_new, n_people_merged = _merge_person_mds(wiki_root, src_wiki)
 
@@ -223,12 +221,11 @@ def add_volume(wiki_root: Path, volume_output_root: Path) -> None:
 
     # 7) Append to the log
     _append_log_entry(wiki_root, slug, n_articles, n_people_new,
-                      n_people_merged, n_regions)
+                      n_people_merged)
 
     print(f"add-volume {slug} → {wiki_root}:")
     print(f"  articles: {n_articles}")
     print(f"  people:   {n_people_new} new, {n_people_merged} merged")
-    print(f"  regions:  {n_regions}")
     print(f"  graph:    {counts['added']} new nodes, "
           f"{counts['updated']} existing nodes updated, "
           f"{counts['total']} total")
@@ -620,13 +617,12 @@ def _render_index(corpus_doc: dict) -> str:
 
 def _append_log_entry(wiki_root: Path, slug: str,
                       n_articles: int, n_people_new: int,
-                      n_people_merged: int, n_regions: int) -> None:
+                      n_people_merged: int) -> None:
     today = date.today().isoformat()
     entry = (
         f"\n## [{today}] add-volume | {slug}\n"
         f"- articles added: {n_articles}\n"
         f"- people: {n_people_new} new, {n_people_merged} merged\n"
-        f"- regions copied: {n_regions}\n"
         f"- _graph/corpus.jsonld merged\n"
     )
     log_path = wiki_root / "log.md"
