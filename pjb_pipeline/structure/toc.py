@@ -134,38 +134,41 @@ def parse_toc_text(text: str) -> List[dict]:
 # ---------------------------------------------------------------------------
 
 # Author tokens at the start of an entry follow one of these shapes:
-#   "Hartmut Wolff,"
-#   "Hartmut Wolff/Walter Wandling,"
-#   "Karl-Heinz Müller-Bauer,"
-#   "Hans v. Aufseß,"  (von, van, de)
-# We're forgiving here on purpose — even a slightly wrong author/title
-# split is fine because the canonical title comes from the section-header
-# anchor on the actual article page.
-_NAME = r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß\-]+"
+#   "Hartmut Wolff/Walter Wandling, Title"           (comma; older volumes)
+#   "Helmut Böhm: Title"                              (colon; newer volumes)
+#   "Astrid Christl-Sorcan und Nicole Eller: Title"   (colon + German "und")
+#   "Helmut W. Schaller: Title"                       (middle initial)
+#   "Hans v. Aufseß, Title"                           (nobiliary particle)
+#
+# A *name token* is an initial ("W.") or a capitalised, possibly hyphenated
+# word ("Christl-Sorcan"). A *person* is one or more name tokens with an
+# optional nobiliary particle (von/van/de). Multiple authors are joined by
+# "/", "&", "und", or "u.".  The colon form requires the leading author to
+# be >= 2 name tokens so a title with an early colon isn't mistaken for one.
+_NAME = r"(?:[A-ZÄÖÜ]\.|[A-ZÄÖÜ][A-Za-zÄÖÜäöüß\-]+)"
 _VONS = r"(?:v\.|von|van|de|d')"
-_AUTHOR_RE = re.compile(
-    rf"^(?P<author>"
-    rf"{_NAME}(?:\s+(?:{_VONS}\s+)?{_NAME})*"
-    rf"(?:\s*[/&]\s*{_NAME}(?:\s+(?:{_VONS}\s+)?{_NAME})*)*"
-    rf")\s*,\s+(?P<title>.+)$",
-    re.DOTALL,
-)
+_PERSON  = rf"{_NAME}(?:\s+(?:{_VONS}\s+)?{_NAME})*"
+_PERSON2 = rf"{_NAME}(?:\s+(?:{_VONS}\s+)?{_NAME})+"
+_JOIN = r"(?:\s*[/&]\s*|\s+und\s+|\s+u\.\s+)"
+_AUTHORS       = rf"{_PERSON}(?:{_JOIN}{_PERSON})*"
+_AUTHORS_COLON = rf"{_PERSON2}(?:{_JOIN}{_PERSON})*"
+
+_COMMA_RE = re.compile(rf"^(?P<author>{_AUTHORS})\s*,\s+(?P<title>.+)$", re.DOTALL)
+_COLON_RE = re.compile(rf"^(?P<author>{_AUTHORS_COLON})\s*:\s+(?P<title>.+)$", re.DOTALL)
+_AUTHOR_RE = _COMMA_RE  # back-compat alias
 
 
-def split_author_title(entry_text: str) -> Tuple[str, str]:
-    """Split ``"Wolff/Wandling, Lateinische Inschriften..."`` into
-    ``("Wolff/Wandling", "Lateinische Inschriften...")``.
-
-    Falls back to ``("", entry_text)`` when the comma-separated pattern
-    doesn't match — better to keep the full title and have no author than
-    to mis-attribute a chunk of title as the author.
-    """
+def split_author_title(entry_text: str):
+    """Split a TOC entry into (author, title). Handles both the comma form
+    used by older volumes and the colon form used by newer ones. Falls back
+    to ("", entry_text) when neither matches."""
     if not entry_text:
         return "", ""
     text = re.sub(r"\s+", " ", entry_text).strip()
-    m = _AUTHOR_RE.match(text)
-    if m:
-        return m.group("author").strip(), m.group("title").strip()
+    for rx in (_COMMA_RE, _COLON_RE):
+        m = rx.match(text)
+        if m:
+            return m.group("author").strip(" ,.;"), m.group("title").strip()
     return "", text
 
 
