@@ -199,6 +199,10 @@ def add_volume(wiki_root: Path, volume_output_root: Path) -> None:
     # frontmatter of volume.md, but the directory name is canonical.
     slug = vol_root.name
 
+    # Recreate the directory skeleton — a cloned wiki has no empty dirs.
+    for sub in WIKI_SUBDIRS:
+        (wiki_root / sub).mkdir(parents=True, exist_ok=True)
+
     # 1) Merge the graph first — index.md regeneration needs it.
     new_corpus_doc, counts = _merge_volume_graph(wiki_root, vol_root, slug)
 
