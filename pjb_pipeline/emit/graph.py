@@ -49,41 +49,12 @@ from ..config import VolumeConfig
 from ..structure.toc import TocStructure
 from ..structure.footnotes import Footnote, FootnoteRef
 from .html.crops import VISUAL_BLOCK_TYPES, region_crop_graph_url
+from .jsonld_context import BASE, CONTEXT  # noqa: F401  (re-exported)
 
 
 # ---------------------------------------------------------------------------
 # IRI helpers
 # ---------------------------------------------------------------------------
-
-# Base IRI under which all nodes live. Pick a domain you own; for now we use
-# a placeholder that downstream tools can rewrite via SPARQL or sed.
-BASE = "https://passauer-jahrbuecher.example/"
-
-CONTEXT = {
-    "@vocab":   "https://schema.org/",
-    "pjb":      BASE,
-    "schema":   "https://schema.org/",
-    "dcterms":  "http://purl.org/dc/terms/",
-    "tei":      "http://www.tei-c.org/ns/1.0#",
-    # Local predicates we don't think belong in schema.org
-    "facsimile":    {"@id": "pjb:facsimile",    "@type": "@id"},
-    "pageStart":    {"@id": "schema:pageStart"},
-    "pageEnd":      {"@id": "schema:pageEnd"},
-    "inSection":    {"@id": "pjb:inSection",    "@type": "@id"},
-    "inVolume":     {"@id": "pjb:inVolume",     "@type": "@id"},
-    "inArticle":    {"@id": "pjb:inArticle",    "@type": "@id"},
-    "inPage":       {"@id": "pjb:inPage",       "@type": "@id"},
-    "inSeries":     {"@id": "schema:isPartOf",  "@type": "@id"},
-    "hasPart":      {"@id": "schema:hasPart",   "@type": "@id"},
-    "tocEntry":     {"@id": "pjb:tocEntry"},
-    "footnoteOf":   {"@id": "pjb:footnoteOf",   "@type": "@id"},
-    "refersTo":     {"@id": "pjb:refersTo",     "@type": "@id"},
-    "rawType":      {"@id": "pjb:rawType"},
-    # Visual-region predicates
-    "contentUrl":   {"@id": "schema:contentUrl"},
-    "bbox":         {"@id": "pjb:bbox"},
-    "regionType":   {"@id": "pjb:regionType"},
-}
 
 
 def _slug(s: str) -> str:

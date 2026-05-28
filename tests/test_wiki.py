@@ -1,0 +1,297 @@
+"""Tests for ``pjb_pipeline.emit.wiki``.
+
+Three things we want to lock in:
+
+1.  The frontmatter on every emitted page is valid YAML that, when
+    parsed, reproduces the corresponding JSON-LD node (modulo the
+    ``@context`` reference we splice in). This is the strict-mode
+    round-trip contract.
+
+2.  TEI-derived body content lands in the article markdown, page by
+    page, with footnotes collected at the end.
+
+3.  Re-running the emitter on the same volume preserves the
+    agent-owned ``## Summary`` / ``## Mentions`` / ``## Notes``
+    sections — the pipeline is allowed to regenerate the structural
+    parts, never the agent's prose.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+from pjb_pipeline.config import VolumeConfig
+from pjb_pipeline.emit import graph as graph_emitter
+from pjb_pipeline.emit import wiki
+from pjb_pipeline.structure.footnotes import Footnote
+
+
+# ---------------------------------------------------------------------------
+# Tiny test-bed fixtures (mirrors tests/test_graph.py)
+# ---------------------------------------------------------------------------
+
+def _cfg(tmp_path: Path) -> VolumeConfig:
+    cfg = VolumeConfig(
+        pdf_path="(unused)",
+        volume_number=48,
+        volume_number_roman="XLVIII",
+        volume_year=2006,
+        slug="pjb-048-2006",
+        output_root=str(tmp_path),
+    )
+    cfg.ensure_dirs()
+    return cfg
+
+
+def _block(bid, type_, text="", bbox=(0, 0, 100, 100)):
+    return {
+        "id": bid, "type": type_, "bbox": list(bbox),
+        "text": text, "html": "",
+    }
+
+
+def _page(pn, blocks):
+    return {
+        "page_num": pn,
+        "image_filename": f"page_{pn:04d}.png",
+        "image_width": 1400,
+        "image_height": 2000,
+        "blocks": blocks,
+    }
+
+
+def _article(art_id, num, title, first, last, author="", section=None, pages=None):
+    return {
+        "id": art_id, "num": num, "title": title,
+        "page_first": first, "page_last": last,
+        "author": author, "section": section,
+        "pages": pages or [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _read_frontmatter(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("---\n"), f"missing frontmatter opener in {path}"
+    end = text.find("\n---\n", 4)
+    assert end > 0, f"missing frontmatter closer in {path}"
+    return yaml.safe_load(text[4:end])
+
+
+def _body(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    end = text.find("\n---\n", 4)
+    return text[end + 5:]
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+def test_wiki_dir_layout(tmp_path):
+    cfg = _cfg(tmp_path)
+
+    articles = [
+        _article(
+            "pjb-048-2006-art01", 1, "Test Article", 5, 6,
+            author="Wolff, Jürgen", section="Aufsätze",
+            pages=[
+                _page(5, [
+                    _block("p5_b001", "section-header", "Test Article"),
+                    _block("p5_b002", "text", "First paragraph of the article."),
+                ]),
+                _page(6, [
+                    _block("p6_b001", "text", "Second paragraph here."),
+                ]),
+            ],
+        ),
+    ]
+    pages = articles[0]["pages"]
+
+    wiki.run(cfg, articles, pages, toc=None,
+             footnotes_by_article={}, refs_by_article={})
+
+    # Directory skeleton
+    assert (cfg.wiki_dir / "volume.md").exists()
+    assert (cfg.wiki_dir / "_context.json").exists()
+    assert (cfg.wiki_dir / "articles" / "pjb-048-2006-art01.md").exists()
+    assert (cfg.wiki_dir / "people" / "wolff-jurgen.md").exists()
+
+
+def test_article_frontmatter_is_jsonld_node(tmp_path):
+    cfg = _cfg(tmp_path)
+
+    art = _article(
+        "pjb-048-2006-art01", 1, "Vilshofen", 9, 10,
+        author="Wolff, Jürgen / Wandling, Anton", section="Aufsätze",
+        pages=[
+            _page(9, [_block("p9_b001", "text", "Body text page 9.")]),
+            _page(10, [_block("p10_b001", "text", "Body text page 10.")]),
+        ],
+    )
+    wiki.run(cfg, [art], art["pages"], toc=None)
+
+    fm = _read_frontmatter(cfg.wiki_dir / "articles" / "pjb-048-2006-art01.md")
+
+    # Structural contract: every key the graph emits must be present in
+    # the frontmatter, and the @id must match the graph's IRI exactly.
+    assert fm["@type"] == "ScholarlyArticle"
+    assert fm["@id"] == "pjb:art/pjb-048-2006-art01"
+    assert fm["name"] == "Vilshofen"
+    assert fm["pageStart"] == 9
+    assert fm["pageEnd"] == 10
+    assert fm["position"] == 1
+    # IRI-typed predicates are emitted as bare strings; the @context
+    # declares them as "@type": "@id", so they round-trip through any
+    # JSON-LD processor as references.
+    assert fm["inVolume"] == "pjb:vol/pjb-048-2006"
+    assert fm["inSection"] == "pjb:vol/pjb-048-2006/section/aufsatze"
+    # Combined byline split into two Person refs
+    assert {"@id": "pjb:person/wolff-jurgen"} in fm["author"]
+    assert {"@id": "pjb:person/wandling-anton"} in fm["author"]
+    # Pages are listed in hasPart (bare IRI strings)
+    assert "pjb:vol/pjb-048-2006/page/0009" in fm["hasPart"]
+    assert "pjb:vol/pjb-048-2006/page/0010" in fm["hasPart"]
+
+
+def test_frontmatter_roundtrips_against_graph_node(tmp_path):
+    """The strict-mode promise: piping frontmatter through yaml.safe_load
+    and stripping ``@context`` reproduces the node the graph emitter
+    would put in the JSON-LD."""
+    cfg = _cfg(tmp_path)
+
+    art = _article(
+        "pjb-048-2006-art01", 1, "Roundtrip Test", 1, 2,
+        author="Smith, Jane", section="Aufsätze",
+        pages=[
+            _page(1, [_block("p1_b001", "text", "x")]),
+            _page(2, [_block("p2_b001", "text", "y")]),
+        ],
+    )
+
+    # What the graph emitter would write
+    graph_doc = graph_emitter.build_volume_graph(
+        cfg, [art], art["pages"], None,
+        footnotes_by_article={}, refs_by_article={},
+    )
+    expected = next(
+        n for n in graph_doc["@graph"]
+        if n.get("@id") == "pjb:art/pjb-048-2006-art01"
+    )
+
+    # What the wiki emitter writes
+    wiki.run(cfg, [art], art["pages"], toc=None)
+    fm = _read_frontmatter(cfg.wiki_dir / "articles" / "pjb-048-2006-art01.md")
+    fm.pop("@context", None)   # the wiki spliced this in; the graph doesn't
+
+    assert fm == expected
+
+
+def test_article_body_has_per_page_sections_and_footnotes(tmp_path):
+    cfg = _cfg(tmp_path)
+
+    art = _article(
+        "pjb-048-2006-art01", 1, "FN Test", 1, 1,
+        author="Smith, J.", section="Aufsätze",
+        pages=[
+            _page(1, [
+                _block("p1_b001", "text", "Body of the article."),
+            ]),
+        ],
+    )
+    notes = [
+        Footnote(article_id="pjb-048-2006-art01", block_id="p1_fn1",
+                 n=1, text="First footnote text.",
+                 html_id="fn_p1_fn1", page_num=1),
+        Footnote(article_id="pjb-048-2006-art01", block_id="p1_fn2",
+                 n=2, text="Second footnote text.",
+                 html_id="fn_p1_fn2", page_num=1),
+    ]
+    wiki.run(cfg, [art], art["pages"], toc=None,
+             footnotes_by_article={"pjb-048-2006-art01": notes})
+
+    body = _body(cfg.wiki_dir / "articles" / "pjb-048-2006-art01.md")
+    assert "## Full Text" in body
+    assert "### Page 1" in body
+    assert "Body of the article." in body
+    assert "## Footnotes" in body
+    assert "1. First footnote text." in body
+    assert "2. Second footnote text." in body
+
+
+def test_agent_owned_sections_are_preserved_on_rerun(tmp_path):
+    cfg = _cfg(tmp_path)
+    art = _article(
+        "pjb-048-2006-art01", 1, "Persistence Test", 1, 1,
+        author="Smith, J.", section="Aufsätze",
+        pages=[_page(1, [_block("p1_b001", "text", "Body.")])],
+    )
+    wiki.run(cfg, [art], art["pages"], toc=None)
+
+    art_path = cfg.wiki_dir / "articles" / "pjb-048-2006-art01.md"
+    original = art_path.read_text(encoding="utf-8")
+
+    # Simulate the LLM editing the agent-owned section
+    edited = original.replace(
+        "## Summary\n\n*To be added.*",
+        "## Summary\n\nThis article discusses something interesting and important.",
+    )
+    art_path.write_text(edited, encoding="utf-8")
+
+    # Re-run the emitter; the Summary content must survive
+    wiki.run(cfg, [art], art["pages"], toc=None)
+
+    final = art_path.read_text(encoding="utf-8")
+    assert "This article discusses something interesting and important." in final
+    # And the structural body is still there (was regenerated)
+    assert "### Page 1" in final
+    assert "Body." in final
+
+
+def test_person_page_lists_articles_in_this_volume(tmp_path):
+    cfg = _cfg(tmp_path)
+    art1 = _article(
+        "pjb-048-2006-art01", 1, "First Paper", 1, 5,
+        author="Wolff, Jürgen", section="Aufsätze",
+        pages=[_page(1, [_block("p1_b001", "text", "x")])],
+    )
+    art2 = _article(
+        "pjb-048-2006-art02", 2, "Second Paper", 10, 12,
+        author="Wolff, Jürgen / Wandling, Anton", section="Aufsätze",
+        pages=[_page(10, [_block("p10_b001", "text", "y")])],
+    )
+    wiki.run(cfg, [art1, art2], art1["pages"] + art2["pages"], toc=None)
+
+    wolff = (cfg.wiki_dir / "people" / "wolff-jurgen.md").read_text(encoding="utf-8")
+    assert "First Paper" in wolff
+    assert "Second Paper" in wolff
+    assert "Wandling, Anton" not in wolff   # only this person's appearances
+
+    wandling = (cfg.wiki_dir / "people" / "wandling-anton.md").read_text(encoding="utf-8")
+    assert "Second Paper" in wandling
+    assert "First Paper" not in wandling
+
+
+def test_volume_md_has_article_toc_grouped_by_section(tmp_path):
+    cfg = _cfg(tmp_path)
+    arts = [
+        _article("pjb-048-2006-art01", 1, "Essay 1", 1, 5,
+                 author="A", section="Aufsätze",
+                 pages=[_page(1, [_block("p1_b001", "text", "x")])]),
+        _article("pjb-048-2006-art02", 2, "Report 1", 100, 110,
+                 author="B", section="Berichte",
+                 pages=[_page(100, [_block("p100_b001", "text", "y")])]),
+    ]
+    wiki.run(cfg, arts, arts[0]["pages"] + arts[1]["pages"], toc=None)
+
+    body = (cfg.wiki_dir / "volume.md").read_text(encoding="utf-8")
+    # Both sections show up, with article links under each
+    assert "### Aufsätze" in body
+    assert "### Berichte" in body
+    assert "[Essay 1](articles/pjb-048-2006-art01.md)" in body
+    assert "[Report 1](articles/pjb-048-2006-art02.md)" in body

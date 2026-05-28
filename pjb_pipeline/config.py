@@ -194,6 +194,16 @@ class VolumeConfig:
         return self.out_dir / "regions"
 
     @property
+    def wiki_dir(self) -> Path:
+        """Per-volume LLM-Wiki markdown source.
+
+        One markdown file per ``ScholarlyArticle`` / ``Person`` / ``PublicationVolume``
+        node in the graph. The ``pjb-pipeline add-volume`` command merges this
+        directory into the corpus-wide wiki repo.
+        """
+        return self.out_dir / "wiki"
+
+    @property
     def logs_dir(self) -> Path:
         return self.out_dir / "logs"
 
@@ -201,6 +211,6 @@ class VolumeConfig:
         for d in (
             self.out_dir, self.pages_dir, self.interim_dir,
             self.pagexml_dir, self.tei_dir, self.html_dir,
-            self.graph_dir, self.regions_dir, self.logs_dir,
+            self.graph_dir, self.regions_dir, self.wiki_dir, self.logs_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)

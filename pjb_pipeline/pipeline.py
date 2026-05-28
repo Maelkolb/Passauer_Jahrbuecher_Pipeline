@@ -13,7 +13,7 @@ from typing import Optional
 
 from . import render, ocr, normalize
 from .config import VolumeConfig
-from .emit import pagexml, tei, graph
+from .emit import pagexml, tei, graph, wiki
 from .emit.html import renderers as html_renderers
 from .emit.html.crops import make_region_crops
 from .stage import stage, format_report
@@ -102,6 +102,13 @@ def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
             refs_by_article=refs_by_article,
         )
 
+    with stage("Emit LLM-Wiki (markdown)", timings):
+        wiki.run(
+            cfg, articles, unified, toc,
+            footnotes_by_article=footnotes_by_article,
+            refs_by_article=refs_by_article,
+        )
+
     with stage("Build HTML edition", timings):
         html_renderers.run(
             cfg, articles, unified, assets_dir,
@@ -129,6 +136,9 @@ def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
     print(f"  • PageXML:  {cfg.pagexml_dir}/  ({len(list(cfg.pagexml_dir.glob('*.xml')))} files)")
     print(f"  • HTML:     {cfg.html_dir}/index.html")
     print(f"  • Graph:    {cfg.graph_dir}/{cfg.slug}.jsonld")
+    print(f"  • Wiki:     {cfg.wiki_dir}/  "
+          f"({len(list((cfg.wiki_dir / 'articles').glob('*.md')))} articles, "
+          f"{len(list((cfg.wiki_dir / 'people').glob('*.md')))} people)")
     print(f"  • Bundle:   {bundle_path}")
 
     return timings

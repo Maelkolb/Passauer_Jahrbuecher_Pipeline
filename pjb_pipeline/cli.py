@@ -59,6 +59,24 @@ def _build_parser() -> argparse.ArgumentParser:
     m.add_argument("output", type=Path, help="Output .jsonld file")
     m.add_argument("inputs", type=Path, nargs="+", help="Input .jsonld files")
 
+    # ---- init-wiki -------------------------------------------------
+    iw = sub.add_parser("init-wiki",
+                        help="Bootstrap an empty LLM-Wiki directory")
+    iw.add_argument("wiki_root", type=Path,
+                    help="Target directory for the wiki (e.g. ../Passauer_Jahrbuecher_Wiki)")
+    iw.add_argument("--force", action="store_true",
+                    help="Allow init even if the target is non-empty "
+                         "(existing articles/, people/, etc. are preserved; "
+                         "CLAUDE.md and the like are rewritten)")
+
+    # ---- add-volume ------------------------------------------------
+    av = sub.add_parser("add-volume",
+                        help="Merge one processed volume into the wiki")
+    av.add_argument("wiki_root", type=Path,
+                    help="The wiki repo (must already be init'd)")
+    av.add_argument("volume_output_root", type=Path,
+                    help="A volume's pipeline output dir (e.g. output/pjb-048-2006)")
+
     return p
 
 
@@ -134,6 +152,16 @@ def main(argv=None) -> int:
         )
         print(f"Merged {len(args.inputs)} graphs → {args.output} "
               f"({len(merged_nodes)} unique nodes)")
+        return 0
+
+    if args.command == "init-wiki":
+        from .wiki_assembler import init_wiki
+        init_wiki(args.wiki_root, force=args.force)
+        return 0
+
+    if args.command == "add-volume":
+        from .wiki_assembler import add_volume
+        add_volume(args.wiki_root, args.volume_output_root)
         return 0
 
     return 1

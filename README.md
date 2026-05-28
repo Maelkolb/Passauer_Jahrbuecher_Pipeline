@@ -11,7 +11,8 @@ page and article structure, and emits five artefacts:
 | PageXML    | `pagexml/`    | PRImA 2019 schema, one file per page, region polygons   |
 | TEI-XML    | `tei/`        | One file per volume, articles + facsimile + footnotes   |
 | HTML       | `html/`       | Static site: cover, TOC, article view, facsimile view   |
-| **JSON-LD**| `graph/`      | **Knowledge-graph fragment for the 50-volume corpus**   |
+| **JSON-LD**| `graph/`      | **Knowledge-graph fragment for the 55-volume corpus**   |
+| **Wiki**   | `wiki/`       | **Markdown source for the LLM-Wiki (one file per article / person / volume)** |
 
 
 
@@ -131,15 +132,19 @@ pjb_pipeline/
 │   ├── articles.py      ← TOC-driven boundary detection + heuristic fallback
 │   └── footnotes.py     ← detect refs in body, link to notes
 ├── emit/
+│   ├── jsonld_context.py← shared JSON-LD @context (graph + wiki share this)
 │   ├── pagexml.py       ← Stage 5: PRImA PageXML
 │   ├── tei.py           ← Stage 6: TEI per volume
 │   ├── graph.py         ← Stage 7: JSON-LD knowledge graph
-│   └── html/            ← Stage 8: static HTML edition
+│   ├── wiki.py          ← Stage 8: per-volume LLM-Wiki markdown
+│   └── html/            ← Stage 9: static HTML edition
 │       ├── chrome.py
 │       ├── crops.py
 │       └── renderers.py
+├── wiki_assembler.py    ← init-wiki / add-volume (corpus-wide wiki ops)
+├── wiki_templates/      ← CLAUDE.md, README.md for the wiki repo
 ├── pipeline.py          ← top-level orchestrator
-└── cli.py               ← `pjb-pipeline run …` entry point
+└── cli.py               ← `pjb-pipeline run | merge-graphs | init-wiki | add-volume`
 
 assets/                  ← canonical CSS + JS, copied into every output bundle
 configs/                 ← one YAML per volume
@@ -182,6 +187,58 @@ This deduplicates nodes by IRI. Cross-volume authors land in a single
 
 The output is a valid JSON-LD document loadable into Apache Jena, rdflib,
 GraphDB, neosemantics, or anything else that speaks RDF.
+
+---
+
+## Building the LLM-Wiki
+
+Alongside the structural JSON-LD, the pipeline emits markdown for each
+volume's articles, people, and volume page under
+`output/<slug>/wiki/`. These per-volume directories are *staging input*
+for a corpus-wide wiki — a single markdown tree, hosted in its own git
+repo, that is the human-readable face of the knowledge graph. Every page
+has YAML frontmatter that *is* the JSON-LD node for that entity, so the
+wiki and the graph round-trip cleanly.
+
+The pattern follows Karpathy's
+[llm-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):
+the pipeline writes structural pages, an LLM agent (e.g. Claude Code)
+maintains the content — summaries, cross-references, thematic linking —
+against the wiki directory.
+
+### Workflow
+
+The wiki lives in a **separate git repo** that you own. Bootstrap it
+once:
+
+```bash
+pjb-pipeline init-wiki ../Passauer_Jahrbuecher_Wiki
+cd ../Passauer_Jahrbuecher_Wiki && git init
+```
+
+After processing each volume, fold its output into the wiki:
+
+```bash
+pjb-pipeline run configs/pjb-049-2007.yaml
+pjb-pipeline add-volume ../Passauer_Jahrbuecher_Wiki output/pjb-049-2007/
+cd ../Passauer_Jahrbuecher_Wiki
+git diff                                       # review what changed
+git add . && git commit -m "Add vol. XLIX (2007)"
+```
+
+`add-volume` is **idempotent** — re-running with the same volume produces
+a no-op diff. It also **preserves agent-authored content** across re-runs:
+`## Summary`, `## Mentions`, and `## Notes` sections you (or an LLM) wrote
+on previous visits stay put; only the structural parts of pages
+(frontmatter, `## Full Text`, `## Footnotes`, `## Appears in`) are
+regenerated. Person pages are merged across volumes so the same author
+appearing in five volumes has one page listing five appearances.
+
+The wiki repo itself ships an opinionated `CLAUDE.md` (the operating
+schema for the LLM agent) explaining the directory layout, the
+frontmatter contract, the agent-owned vs. pipeline-owned sections, and
+the ingest / query / lint operations. Open the wiki directory in Claude
+Code and the rest is conversation.
 
 ---
 

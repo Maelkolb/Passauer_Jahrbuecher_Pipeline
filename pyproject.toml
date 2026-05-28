@@ -41,5 +41,10 @@ where = ["."]
 include = ["pjb_pipeline*"]
 
 [tool.setuptools.package-data]
-# Ship the canonical CSS/JS alongside the package so a pip install carries them.
-pjb_pipeline = ["../assets/edition.css", "../assets/edition.js"]
+# Ship the canonical CSS/JS and the wiki templates alongside the package
+# so a pip install carries them.
+pjb_pipeline = [
+    "../assets/edition.css",
+    "../assets/edition.js",
+    "wiki_templates/*.md",
+]
