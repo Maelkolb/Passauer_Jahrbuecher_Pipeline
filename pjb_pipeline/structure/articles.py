@@ -191,6 +191,17 @@ def _toc_driven(
 
     for i, (pdf_pn, entry) in enumerate(anchors):
         page_last = anchors[i + 1][0] - 1 if i + 1 < len(anchors) else last_pdf
+        # Clamp: several TOC entries often share a start page (book reviews
+        # packed onto one page), so "next anchor minus one" can put page_last
+        # before page_first → empty page slice → empty article body. Ensure
+        # every article spans at least its own start page.
+        if page_last < pdf_pn:
+            page_last = pdf_pn
+        toc_end = getattr(entry, "page_end", None)
+        if toc_end is not None:
+            toc_end_pdf = toc_end + offset
+            if pdf_pn <= toc_end_pdf <= page_last:
+                page_last = toc_end_pdf
         # Refine the title via the in-page section-header anchor if we can
         # find one — it usually has the canonical capitalisation.
         title = entry.title
