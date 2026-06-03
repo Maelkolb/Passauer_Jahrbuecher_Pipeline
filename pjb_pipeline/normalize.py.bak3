@@ -13,9 +13,7 @@ Stage 3. Takes the raw per-page JSON written by ``ocr.run()`` and:
 
 from __future__ import annotations
 
-import html as html_module
 import json
-import re
 from pathlib import Path
 from typing import List
 
@@ -23,32 +21,6 @@ from tqdm.auto import tqdm
 
 from .config import VolumeConfig
 from .structure.columns import detect_columns, assign_columns, reading_order
-
-# Visual block types whose Chandra-generated alt-text description we want
-# to surface as a first-class ``description`` field. The graph emitter and
-# the wiki emitter both fall back to this when the block has no Chandra-
-# extracted text caption of its own.
-_VISUAL_TYPES_FOR_DESCRIPTION = {"image", "figure", "diagram"}
-
-_IMG_ALT_RE = re.compile(r'<img\b[^>]*\balt="([^"]*)"', re.IGNORECASE | re.DOTALL)
-
-
-def _extract_chandra_alt(html: str) -> str:
-    """Pull the alt-text description out of an ``<img alt="…">`` tag.
-
-    Chandra emits visual blocks with the layout-only text field empty and
-    the actual description tucked into the ``alt`` attribute of an
-    ``<img>`` element inside the block's ``html`` field. Without this,
-    every figure in the wiki and every ImageObject in the JSON-LD graph
-    would carry only a generic placeholder name. Returns ``""`` if no
-    alt text is found.
-    """
-    if not html:
-        return ""
-    m = _IMG_ALT_RE.search(html)
-    if not m:
-        return ""
-    return html_module.unescape(m.group(1)).strip()
 
 
 # Canonical type vocabulary used by every downstream emitter.
@@ -118,25 +90,14 @@ def build_unified_page(raw_doc: dict) -> dict:
     w, h = raw_doc["image_width"], raw_doc["image_height"]
     blocks = []
     for b in raw_doc.get("blocks", []):
-        canon = canonical_type(b.get("type", "text"))
-        html_field = b.get("html", "").strip()
-        blk: dict = {
+        blocks.append({
             "id":       b["id"],
-            "type":     canon,
+            "type":     canonical_type(b.get("type", "text")),
             "raw_type": b.get("type", "text"),
             "bbox":     to_pixel_bbox(b.get("bbox"), w, h),
             "text":     b.get("text", "").strip(),
-            "html":     html_field,
-        }
-        # Surface Chandra's alt-text description for visual blocks as a
-        # dedicated ``description`` field. Downstream emitters (wiki,
-        # graph) read it when no human-extracted caption text is
-        # available.
-        if canon in _VISUAL_TYPES_FOR_DESCRIPTION:
-            desc = _extract_chandra_alt(html_field)
-            if desc:
-                blk["description"] = desc
-        blocks.append(blk)
+            "html":     b.get("html", "").strip(),   # rich HTML content from Chandra
+        })
     # Fallback: dump the markdown into a single text block so the page
     # isn't completely empty when layout parsing failed.
     if not blocks and raw_doc.get("markdown"):

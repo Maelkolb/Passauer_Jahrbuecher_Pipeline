@@ -39,7 +39,7 @@ from typing import Dict, List, Optional, Tuple
 import yaml
 
 from ..config import VolumeConfig
-from ..structure.footnotes import Footnote, _PLAIN_DIGIT_REF
+from ..structure.footnotes import Footnote
 from ..structure.toc import TocStructure
 from . import graph as graph_emitter
 from .html.crops import VISUAL_BLOCK_TYPES
@@ -125,17 +125,11 @@ _SKIP_TYPES = {"page-header", "page-footer", "table-of-contents"}
 def _figure_md(blk: dict, label: str) -> str:
     """Inline image reference for a figure block.
 
-    Renders a quoted text marker so the wiki carries no binary image
-    payload. If the block has no human-extracted caption text but Chandra
-    produced a description (surfaced as ``description`` by
-    :mod:`pjb_pipeline.normalize`), we use that — the journal's own
-    caption block lives in a separate ``caption``-typed block and will
-    follow this one in reading order anyway, so the two read together as
-    *marker · Chandra description / Journal caption*.
+    The image path is relative to the *article* markdown file's location
+    (``wiki/articles/<art>.md``), which is two levels deep from the volume
+    root, so we hop up two directories to reach ``regions/``.
     """
     desc = (blk.get("text") or "").strip()
-    if not desc:
-        desc = (blk.get("description") or "").strip()
     body = f"> **[{label} · {blk['id']}]**"
     if desc:
         body += f" {desc}"
@@ -203,61 +197,25 @@ def _join_hyphenation(text: str) -> str:
     )
 
 
-def _footnote_id(page_num: Optional[int], n: int, *, numbered: bool = True) -> str:
-    """Markdown-footnote identifier scoped to the source page.
-
-    Per-page numbering in the corpus means a flat ``[^1]`` would collide
-    across pages — so the IDs are ``p018-1``, ``p019-1``, … for numbered
-    footnotes, and ``p018-u1``, ``p018-u2``, … for unnumbered ones (the
-    asterisk note, the abbreviation list).
-    """
-    p = "p???" if page_num is None else f"p{int(page_num):03d}"
-    return f"{p}-{'' if numbered else 'u'}{n}"
-
-
-def _insert_footnote_refs(
-    text: str,
-    page_num: Optional[int],
-    page_numbered: set,
-) -> str:
-    """Rewrite a body chunk so its inline footnote references become
-    markdown footnote markers (``[^p018-2]``).
-
-    The rewrite is conservative: it only fires on a plain digit that
-    sits between a word and a sentence-end punctuation mark AND that
-    matches a real numbered footnote on the same page. Years (four
-    digits), citation lists (no spaces around the comma), and
-    in-paragraph numbers on pages that happen to have no matching
-    footnote all pass through untouched.
-
-    The leading space the regex matches is removed so the marker
-    attaches to the preceding word ("bezogen[^p018-2] ." rather than
-    "bezogen [^p018-2] ."); the trailing space is preserved so the
-    sentence-end punctuation isn't smushed against the marker.
-    """
-    if not page_numbered:
-        return text
-
-    def repl(m: "re.Match[str]") -> str:
-        n = int(m.group("n"))
-        if n not in page_numbered:
-            return m.group(0)
-        return f"[^{_footnote_id(page_num, n)}]"
-
-    return _PLAIN_DIGIT_REF.sub(repl, text)
-
-
 def _render_footnotes_section(notes: List[Footnote]) -> str:
     """Render the article's footnotes, grouped by source page.
 
-    Real numbered footnotes use standard markdown footnote syntax —
-    ``[^p018-1]: …`` — so a reader's markdown viewer (Obsidian, Pandoc,
-    GitHub) renders the inline ``[^p018-1]`` in the body as a
-    clickable superscript that jumps here. Unnumbered footnotes (the
-    asterisk note, the abbreviation key list) get markdown footnote
-    syntax too but with a ``u`` in the ID so it can't collide with a
-    real footnote on the same page; nothing in the body references
-    them, so they appear as standalone definitions at the end.
+    Journal footnotes in this corpus restart numbering per page, so a
+    single flat ``1. … 2. …`` list ends up with multiple "1." entries
+    once you have more than one page of footnotes. Grouping by source
+    page preserves the original numbering scheme and makes the section
+    legible:
+
+        ## Footnotes
+
+        ### Page 18
+
+        1. Stoll, Integration und Abgrenzung 520 …
+        2. Zu Fahnentieren wichtig …
+
+        ### Page 19
+
+        3. Stoll, Heer und Gesellschaft …
     """
     if not notes:
         return ""
@@ -273,54 +231,30 @@ def _render_footnotes_section(notes: List[Footnote]) -> str:
             parts.append("\n### Unattributed\n\n")
         for fn in by_page[page]:
             text = (fn.text or "").strip().replace("\n", " ")
-            fid = _footnote_id(fn.page_num, fn.n, numbered=fn.is_numbered)
-            parts.append(f"[^{fid}]: {text}\n")
+            parts.append(f"{fn.n}. {text}\n")
     return "".join(parts)
 
 
 def _render_article_body(article: dict, footnotes: List[Footnote]) -> str:
     """Render the article's body (per-page) and footnotes (grouped by page).
 
-    Three text-level transforms run as part of body rendering:
-
-    * **Hyphenation join** — typographic hyphens that split a word
-      across adjacent blocks within the same page are stitched back
-      together (``verlie-`` + ``henen Stangenfeldzeichen`` →
-      ``verliehenen Stangenfeldzeichen``).
-    * **Footnote-ref insertion** — plain-digit footnote refs in body
-      text (``bezogen 2 .``) are rewritten as markdown footnote markers
-      (``bezogen[^p018-2] .``) so they become clickable in viewers
-      that handle ``[^id]`` syntax.
-    * **Page-grouped footnote definitions** — the ``## Footnotes``
-      section at the end of the article uses ``[^id]: …`` syntax,
-      grouped by source page so the per-page numbering reads cleanly
-      and the inline refs above resolve to a definition here.
+    The body is structured as ``### Page N`` followed by the page's blocks
+    in document order. Typographic hyphens that split a word across
+    adjacent blocks within the same page are stitched back together
+    (``verlie-`` + ``henen Stangenfeldzeichen`` → ``verliehenen Stangenfeldzeichen``).
 
     The first page typically opens with the article's section-header
     repeating the title (which the TEI emitter strips); we keep it here
     because the markdown reader has the article title only once, in the
     H1 above the body, and a duplicate in-flow heading is survivable.
     """
-    from ..structure.footnotes import numbered_footnotes_by_page
-    page_numbered = numbered_footnotes_by_page(footnotes)
-
     parts: List[str] = []
     for pg in article.get("pages", []):
-        page_num = pg["page_num"]
-        page_set = page_numbered.get(page_num, set())
-        parts.append(f"### Page {page_num}\n\n")
+        parts.append(f"### Page {pg['page_num']}\n\n")
         for blk in pg.get("blocks", []):
             chunk = _block_to_md(blk)
-            if not chunk:
-                continue
-            # Only rewrite refs inside body text blocks — never inside
-            # footnote bodies themselves (the leading "2 " of "2 Zu
-            # Fahnentieren …" would otherwise be eaten), nor inside
-            # captions / tables / headers where digits often have other
-            # meanings.
-            if blk.get("type") in ("text", "list", "bibliography"):
-                chunk = _insert_footnote_refs(chunk, page_num, page_set)
-            parts.append(chunk)
+            if chunk:
+                parts.append(chunk)
     body = _join_hyphenation("".join(parts)).rstrip() + "\n"
 
     body += _render_footnotes_section(footnotes)

@@ -220,12 +220,8 @@ def test_article_body_has_per_page_sections_and_footnotes(tmp_path):
     assert "### Page 1" in body
     assert "Body of the article." in body
     assert "## Footnotes" in body
-    # Footnote definitions use standard markdown footnote syntax now,
-    # with per-page-scoped IDs, so an inline ``[^p001-1]`` ref in the
-    # body resolves cleanly even across pages whose footnote numbers
-    # restart.
-    assert "[^p001-1]: First footnote text." in body
-    assert "[^p001-2]: Second footnote text." in body
+    assert "1. First footnote text." in body
+    assert "2. Second footnote text." in body
 
 
 def test_agent_owned_sections_are_preserved_on_rerun(tmp_path):
@@ -371,87 +367,13 @@ class TestFootnoteGroupingByPage:
         assert "### Page 19" in out
         # The Page 18 block precedes Page 19
         assert out.index("### Page 18") < out.index("### Page 19")
-        # Markdown-footnote syntax with page-scoped IDs: two "1." entries
-        # no longer collide because their IDs (p018-1 vs p019-1) are
-        # distinct.
+        # Two footnotes "1." now — but they're under different page
+        # subheaders, so the reader can tell them apart.
         page18 = out.split("### Page 19")[0]
         page19 = out.split("### Page 19")[1]
-        assert "[^p018-1]: Stoll" in page18
-        assert "[^p018-2]: Domaszewski" in page18
-        assert "[^p019-1]: Ankersdorfer" in page19
+        assert "1. Stoll" in page18
+        assert "1. Ankersdorfer" in page19
 
     def test_empty_footnotes_renders_nothing(self):
         from pjb_pipeline.emit.wiki import _render_footnotes_section
         assert _render_footnotes_section([]) == ""
-
-
-
-# ---------------------------------------------------------------------------
-# Markdown footnote-ref insertion + image alt-text in figure rendering
-# (regressions for the wiki-side parts of the footnote-linking and
-# image-description fixes)
-# ---------------------------------------------------------------------------
-
-class TestMarkdownFootnoteRefsInBody:
-    """When a body block contains an inline plain-digit footnote ref AND
-    a footnote with that number exists on the same page, the wiki
-    emitter rewrites the digit as ``[^pXXX-N]`` markdown footnote
-    syntax. Obsidian / Pandoc render this as a clickable superscript."""
-
-    def test_inline_ref_becomes_markdown_footnote_marker(self):
-        from pjb_pipeline.emit.wiki import _insert_footnote_refs
-        text = "Wie jede der römischen Legionen bezogen 2 . Sie waren ..."
-        out = _insert_footnote_refs(text, page_num=18, page_numbered={1, 2, 3})
-        assert "[^p018-2]" in out
-        assert "bezogen" in out and "Sie waren" in out
-        assert "bezogen 2 ." not in out
-
-    def test_unknown_number_passes_through(self):
-        from pjb_pipeline.emit.wiki import _insert_footnote_refs
-        text = "Bei Punkt 7 wird es klar ."
-        out = _insert_footnote_refs(text, page_num=18, page_numbered={1, 2})
-        assert "[^" not in out
-        assert "Punkt 7 wird" in out
-
-    def test_empty_numbered_set_returns_text_unchanged(self):
-        from pjb_pipeline.emit.wiki import _insert_footnote_refs
-        text = "Etwas mit Zahlen 2 und 5 ."
-        out = _insert_footnote_refs(text, page_num=18, page_numbered=set())
-        assert out == text
-
-
-class TestFigureRendersChandraAltDescription:
-    """When a figure block has no caption text of its own but Chandra
-    surfaced a description (via the alt attribute on its <img> tag),
-    the wiki emitter should use that description in the figure
-    marker."""
-
-    def test_figure_marker_includes_chandra_alt(self):
-        from pjb_pipeline.emit.wiki import _figure_md
-        blk = {
-            "id": "p18_b004",
-            "type": "image",
-            "text": "",
-            "description": "A circular seal showing a stork.",
-        }
-        out = _figure_md(blk, "Image")
-        assert "[Image · p18_b004]" in out
-        assert "A circular seal showing a stork." in out
-
-    def test_text_caption_takes_precedence_over_description(self):
-        from pjb_pipeline.emit.wiki import _figure_md
-        blk = {
-            "id": "p27_b003",
-            "type": "image",
-            "text": "Abb. 1: Denare des Septimius Severus.",
-            "description": "Generic alt text that should not appear.",
-        }
-        out = _figure_md(blk, "Image")
-        assert "Abb. 1: Denare" in out
-        assert "Generic alt text" not in out
-
-    def test_figure_without_either_still_renders_marker(self):
-        from pjb_pipeline.emit.wiki import _figure_md
-        blk = {"id": "p1_b1", "type": "image", "text": "", "html": ""}
-        out = _figure_md(blk, "Image")
-        assert "[Image · p1_b1]" in out

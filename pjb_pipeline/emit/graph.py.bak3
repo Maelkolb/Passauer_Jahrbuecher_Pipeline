@@ -240,16 +240,10 @@ def build_volume_graph(
             fig_id = figure_iri(cfg, pn, blk["id"])
             figure_iris_on_page.append(fig_id)
             cap = (blk.get("text") or "").strip()
-            # Chandra often supplies a description as the alt-text of an
-            # <img> tag — surfaced by build_unified_page as
-            # ``block["description"]``. Use it when the block has no
-            # human-extracted caption text, so the ImageObject node
-            # carries something more useful than "Image on page 18".
-            chandra_desc = (blk.get("description") or "").strip()
             fig_node: dict = {
                 "@id":         fig_id,
                 "@type":       "ImageObject",
-                "name":        cap or chandra_desc or f"{blk['type'].title()} on page {pn}",
+                "name":        cap or f"{blk['type'].title()} on page {pn}",
                 "regionType":  blk["type"],
                 "inPage":      page_iri(cfg, pn),
                 "pageStart":   pn,
@@ -260,8 +254,6 @@ def build_volume_graph(
             }
             if cap:
                 fig_node["description"] = cap
-            elif chandra_desc:
-                fig_node["description"] = chandra_desc
             bbox = blk.get("bbox")
             if bbox and len(bbox) >= 4:
                 # Store as a list of four ints so SPARQL / JSON consumers

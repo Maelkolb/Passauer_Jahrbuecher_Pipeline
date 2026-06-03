@@ -80,15 +80,6 @@ class Footnote:
     text:       str
     html_id:    str           # the anchor id used in HTML output
     page_num:   Optional[int] = None   # PDF page this footnote sits on
-    is_numbered: bool = True  # ``True`` if ``n`` was parsed from the body
-                              # text (a real footnote reference target);
-                              # ``False`` if we had to auto-assign a
-                              # sequence number because the block had no
-                              # leading digit (asterisk notes, abbrevia-
-                              # tion lists). Body refs only link to
-                              # numbered footnotes — the unnumbered ones
-                              # are bibliographic preamble that no inline
-                              # ref points to.
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -115,105 +106,26 @@ def parse_footnote_body(text: str) -> Tuple[Optional[int], str]:
 
 def collect_article_footnotes(article: dict) -> List[Footnote]:
     """Walk every page of an article, find footnote blocks, parse their
-    leading number, and return a list ordered by appearance.
-
-    A footnote block whose body starts with a digit (most footnotes) gets
-    that digit as its ``n`` and is marked ``is_numbered=True`` — these
-    are real footnotes that body refs can point at. A block whose body
-    has no leading digit (the asterisk note at the bottom of the first
-    page of an article, the abbreviation key list, etc.) is given a
-    per-page sequence number and marked ``is_numbered=False``; nothing
-    in the body references those.
-
-    ``html_id`` is page-scoped because footnote numbers restart per page
-    in this corpus, so two footnotes can legitimately share ``n``;
-    without page scoping the anchors would collide in HTML output and
-    the markdown footnote IDs in the wiki would be ambiguous.
-    """
+    leading number, and return a list ordered by appearance."""
     notes: List[Footnote] = []
-    unnumbered_seq_by_page: Dict[Optional[int], int] = {}
+    seq = 1
     for p in article.get("pages", []):
-        page_num = p.get("page_num")
         for blk in p["blocks"]:
             if blk["type"] != "footnote":
                 continue
-            parsed_n, body = parse_footnote_body(blk.get("text", ""))
-            if parsed_n is not None:
-                n = parsed_n
-                is_numbered = True
-            else:
-                seq = unnumbered_seq_by_page.get(page_num, 0) + 1
-                unnumbered_seq_by_page[page_num] = seq
+            n, body = parse_footnote_body(blk.get("text", ""))
+            if n is None:
                 n = seq
-                is_numbered = False
-            p_tag = "p???" if page_num is None else f"p{int(page_num):03d}"
-            u_tag = "" if is_numbered else "u"
             notes.append(Footnote(
                 article_id=article["id"],
                 block_id=blk["id"],
                 n=n,
                 text=body,
-                html_id=f"fn-{article['id']}-{p_tag}-{u_tag}{n}",
-                page_num=page_num,
-                is_numbered=is_numbered,
+                html_id=f"fn-{article['id']}-{n}",
+                page_num=p.get("page_num"),
             ))
+            seq += 1
     return notes
-
-
-# Plain ASCII-digit footnote references — the dominant style on this
-# corpus, since Chandra emits "Regimentes 1 ." rather than "Regimentes¹"
-# or "Regimentes 1^". The pattern is intentionally tight to keep false-
-# positives low:
-#
-#   word-char + space(s) + 1-3 digit number + space(s) + sentence-end punct
-#
-# Sentence-end punctuation means "." "," ";" ":" "!" "?" "-" ")" "]" or
-# end-of-paragraph. Year numbers like "1825" are four digits and don't
-# match. Citation lists like "Tac. ann. 1, 17, 6" have no space between
-# the digit and the comma, so don't match. The match still has to clear
-# an additional veto: the matched number must actually be present in
-# the per-page numbered-footnote set passed to
-# ``find_plain_digit_refs`` — without that, "Punkt 7 ." or "ist 2 mal
-# so" would be linked even on pages where no footnote 7 or 2 exists.
-_PLAIN_DIGIT_REF = re.compile(
-    r"(?<=\w)\s+(?P<n>\d{1,3})(?=\s+[.,;:!?\-)\]]|\s*$)"
-)
-
-
-def find_plain_digit_refs(
-    text: str,
-    numbered_set: set,
-) -> List[Tuple[int, int, int]]:
-    """Find plain-digit footnote refs in body text.
-
-    Only emits matches whose number is in ``numbered_set`` — typically
-    the set of footnote numbers actually present on the same page. This
-    is the veto that keeps the detector from linking every stray
-    sentence-end digit to an unrelated footnote elsewhere in the
-    article.
-
-    Match positions cover only the digit characters themselves, so a
-    rewriter can replace just the digit with a markdown footnote marker
-    and leave the surrounding whitespace and punctuation intact.
-    """
-    if not numbered_set:
-        return []
-    found: List[Tuple[int, int, int]] = []
-    for m in _PLAIN_DIGIT_REF.finditer(text):
-        n = int(m.group("n"))
-        if n not in numbered_set:
-            continue
-        found.append((m.start("n"), m.end("n"), n))
-    return found
-
-
-def numbered_footnotes_by_page(notes: List[Footnote]) -> Dict[Optional[int], set]:
-    """Build ``{page_num: {set of numbered footnote ns on that page}}``."""
-    by_page: Dict[Optional[int], set] = {}
-    for fn in notes:
-        if fn.is_numbered:
-            by_page.setdefault(fn.page_num, set()).add(fn.n)
-    return by_page
 
 
 def find_refs_in_text(text: str) -> List[Tuple[int, int, int]]:
@@ -256,39 +168,18 @@ def find_refs_in_text(text: str) -> List[Tuple[int, int, int]]:
 
 def link_article_footnotes(article: dict) -> Tuple[List[Footnote], List[FootnoteRef]]:
     """For one article, collect footnotes and find/resolve references to
-    them inside the body text. Returns ``(notes, refs)``.
-
-    Resolution is scoped to the page the body block sits on — journal
-    footnotes restart numbering per page in this corpus, so a body
-    "bezogen 2 ." on page 19 must resolve to the footnote labelled "2"
-    on page 19, not the one on page 18.
-    """
+    them inside the body text. Returns ``(notes, refs)``."""
     notes = collect_article_footnotes(article)
-    notes_by_page_n: Dict[Tuple[Optional[int], int], Footnote] = {
-        (fn.page_num, fn.n): fn for fn in notes if fn.is_numbered
-    }
-    numbered_by_page = numbered_footnotes_by_page(notes)
+    notes_by_n: Dict[int, Footnote] = {fn.n: fn for fn in notes}
 
     refs: List[FootnoteRef] = []
     for p in article.get("pages", []):
-        page_num = p.get("page_num")
-        page_numbered = numbered_by_page.get(page_num, set())
         for blk in p["blocks"]:
             if blk["type"] in ("footnote", "page-header", "page-footer", "table-of-contents"):
                 continue
             text = blk.get("text", "") or ""
             for s, e, n in find_refs_in_text(text):
-                target = notes_by_page_n.get((page_num, n))
-                refs.append(FootnoteRef(
-                    article_id=article["id"],
-                    block_id=blk["id"],
-                    n=n,
-                    start=s,
-                    end=e,
-                    target_id=target.html_id if target else None,
-                ))
-            for s, e, n in find_plain_digit_refs(text, page_numbered):
-                target = notes_by_page_n.get((page_num, n))
+                target = notes_by_n.get(n)
                 refs.append(FootnoteRef(
                     article_id=article["id"],
                     block_id=blk["id"],
