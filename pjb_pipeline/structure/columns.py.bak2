@@ -109,18 +109,16 @@ def detect_columns(
 
     # Use the actual edges of the detected groups to give the columns
     # their real bounds (so the rendered columns hug the content).
-    # Clamp each side at the detected gutter midline so stray blocks
-    # (an author byline at the top of the page, a centred caption,
-    # anything narrow that's not truly in one column) can't drag a
-    # column's edge across the gutter. Without this, a single centred
-    # block above the body — extremely common on the first page of an
-    # article — trips the overlap check and disables column detection
-    # for the whole page, sending everything back to plain y-sorting.
-    mid = int(midline)
     left_start  = min(b["bbox"][0] for b in left)
-    left_end    = min(max(b["bbox"][2] for b in left), mid)
-    right_start = max(min(b["bbox"][0] for b in right), mid)
+    left_end    = max(b["bbox"][2] for b in left)
+    right_start = min(b["bbox"][0] for b in right)
     right_end   = max(b["bbox"][2] for b in right)
+
+    # Final sanity check: the two column ranges must not overlap
+    # horizontally — otherwise the "columns" are likely artefacts of a
+    # noisy layout pass.
+    if left_end > right_start:
+        return []
 
     return [(int(left_start), int(left_end)), (int(right_start), int(right_end))]
 
