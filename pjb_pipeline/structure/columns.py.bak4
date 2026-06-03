@@ -24,20 +24,9 @@ from typing import List, Optional, Tuple
 
 
 # Block types that should NEVER be confined to a single column — they
-# always span the full page width regardless of geometry.
-#
-# Note: ``section-header`` is intentionally NOT in this set, even though
-# Chandra often emits section headers near the top of a page that DO
-# span both columns. Many narrow section headers live entirely inside
-# one column ("Die Bedeutung der Fahnentiere — Kalender, Götter,
-# Regimentsgeschichte(n)" on p20 of vol 52 is the canonical example),
-# and unconditionally treating them as spanning makes ``reading_order``
-# split the page into bands at the wrong y, which scrambles which
-# column-2 block follows which column-1 block. The width check in
-# ``assign_columns`` (block wider than 60 % of the page → ``_column =
-# None``) still catches the genuinely-spanning article titles, so we
-# defer the spanning vs in-column decision to geometry instead of type.
+# always span the full page width.
 _SPANNING_TYPES = {
+    "section-header",
     "page-header",
     "page-footer",
     "table-of-contents",

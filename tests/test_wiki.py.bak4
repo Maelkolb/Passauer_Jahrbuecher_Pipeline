@@ -220,14 +220,12 @@ def test_article_body_has_per_page_sections_and_footnotes(tmp_path):
     assert "### Page 1" in body
     assert "Body of the article." in body
     assert "## Footnotes" in body
-    # Footnote definitions use HTML anchors so per-page subheaders stay
-    # populated (markdown ``[^id]: text`` syntax is hoisted by GitHub's
-    # renderer into a single auto-generated section at the bottom,
-    # which empties any per-page subheaders we'd put around them).
-    assert 'id="fn-p001-1"' in body
-    assert 'id="fn-p001-2"' in body
-    assert "First footnote text." in body
-    assert "Second footnote text." in body
+    # Footnote definitions use standard markdown footnote syntax now,
+    # with per-page-scoped IDs, so an inline ``[^p001-1]`` ref in the
+    # body resolves cleanly even across pages whose footnote numbers
+    # restart.
+    assert "[^p001-1]: First footnote text." in body
+    assert "[^p001-2]: Second footnote text." in body
 
 
 def test_agent_owned_sections_are_preserved_on_rerun(tmp_path):
@@ -373,18 +371,14 @@ class TestFootnoteGroupingByPage:
         assert "### Page 19" in out
         # The Page 18 block precedes Page 19
         assert out.index("### Page 18") < out.index("### Page 19")
-        # HTML-anchor footnotes with page-scoped IDs: per-page
-        # subheaders survive in the rendered output, and the two "1"
-        # entries no longer collide because their anchor IDs
-        # (p018-1 vs p019-1) are distinct.
+        # Markdown-footnote syntax with page-scoped IDs: two "1." entries
+        # no longer collide because their IDs (p018-1 vs p019-1) are
+        # distinct.
         page18 = out.split("### Page 19")[0]
         page19 = out.split("### Page 19")[1]
-        assert 'id="fn-p018-1"' in page18
-        assert "Stoll" in page18
-        assert 'id="fn-p018-2"' in page18
-        assert "Domaszewski" in page18
-        assert 'id="fn-p019-1"' in page19
-        assert "Ankersdorfer" in page19
+        assert "[^p018-1]: Stoll" in page18
+        assert "[^p018-2]: Domaszewski" in page18
+        assert "[^p019-1]: Ankersdorfer" in page19
 
     def test_empty_footnotes_renders_nothing(self):
         from pjb_pipeline.emit.wiki import _render_footnotes_section
@@ -398,21 +392,17 @@ class TestFootnoteGroupingByPage:
 # image-description fixes)
 # ---------------------------------------------------------------------------
 
-class TestHtmlAnchorFootnoteRefsInBody:
+class TestMarkdownFootnoteRefsInBody:
     """When a body block contains an inline plain-digit footnote ref AND
     a footnote with that number exists on the same page, the wiki
-    emitter rewrites the digit as an HTML ``<sup><a>…</a></sup>`` link
-    to the matching definition. HTML anchors survive GitHub's
-    markdown rendering without being hoisted, so the per-page
-    grouping of footnote definitions stays intact."""
+    emitter rewrites the digit as ``[^pXXX-N]`` markdown footnote
+    syntax. Obsidian / Pandoc render this as a clickable superscript."""
 
-    def test_inline_ref_becomes_html_anchor(self):
+    def test_inline_ref_becomes_markdown_footnote_marker(self):
         from pjb_pipeline.emit.wiki import _insert_footnote_refs
         text = "Wie jede der römischen Legionen bezogen 2 . Sie waren ..."
         out = _insert_footnote_refs(text, page_num=18, page_numbered={1, 2, 3})
-        assert 'href="#fn-p018-2"' in out
-        assert 'id="fnref-p018-2"' in out
-        assert "<sup>" in out
+        assert "[^p018-2]" in out
         assert "bezogen" in out and "Sie waren" in out
         assert "bezogen 2 ." not in out
 
@@ -420,8 +410,7 @@ class TestHtmlAnchorFootnoteRefsInBody:
         from pjb_pipeline.emit.wiki import _insert_footnote_refs
         text = "Bei Punkt 7 wird es klar ."
         out = _insert_footnote_refs(text, page_num=18, page_numbered={1, 2})
-        assert "<sup>" not in out
-        assert "fn-" not in out
+        assert "[^" not in out
         assert "Punkt 7 wird" in out
 
     def test_empty_numbered_set_returns_text_unchanged(self):

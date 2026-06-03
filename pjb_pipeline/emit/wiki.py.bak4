@@ -221,25 +221,19 @@ def _insert_footnote_refs(
     page_numbered: set,
 ) -> str:
     """Rewrite a body chunk so its inline footnote references become
-    HTML anchor links to the matching definitions in the footnotes
-    section.
+    markdown footnote markers (``[^p018-2]``).
 
-    Why HTML anchors and not markdown ``[^id]`` syntax: GitHub's
-    markdown renderer hoists every ``[^id]: text`` definition out of
-    where it appears and consolidates them into one auto-generated
-    "Footnotes" section at the bottom of the rendered page — leaving
-    any per-page subheaders ``### Page 18``, ``### Page 19`` … sitting
-    in the original location with nothing under them. Manual HTML
-    anchors stay where we write them, so the per-page grouping of
-    footnote definitions survives the round-trip through GitHub (and
-    Obsidian).
-
-    The rewrite is still conservative: it only fires on a plain digit
-    that sits between a word and a sentence-end punctuation mark AND
-    that matches a real numbered footnote on the same page. Years
-    (four digits), citation lists (no spaces around the comma), and
+    The rewrite is conservative: it only fires on a plain digit that
+    sits between a word and a sentence-end punctuation mark AND that
+    matches a real numbered footnote on the same page. Years (four
+    digits), citation lists (no spaces around the comma), and
     in-paragraph numbers on pages that happen to have no matching
     footnote all pass through untouched.
+
+    The leading space the regex matches is removed so the marker
+    attaches to the preceding word ("bezogen[^p018-2] ." rather than
+    "bezogen [^p018-2] ."); the trailing space is preserved so the
+    sentence-end punctuation isn't smushed against the marker.
     """
     if not page_numbered:
         return text
@@ -248,10 +242,7 @@ def _insert_footnote_refs(
         n = int(m.group("n"))
         if n not in page_numbered:
             return m.group(0)
-        fid = _footnote_id(page_num, n)
-        return (
-            f'<sup><a id="fnref-{fid}" href="#fn-{fid}">{n}</a></sup>'
-        )
+        return f"[^{_footnote_id(page_num, n)}]"
 
     return _PLAIN_DIGIT_REF.sub(repl, text)
 
@@ -259,15 +250,14 @@ def _insert_footnote_refs(
 def _render_footnotes_section(notes: List[Footnote]) -> str:
     """Render the article's footnotes, grouped by source page.
 
-    Each numbered footnote becomes a paragraph with an HTML anchor
-    target (``<a id="fn-p018-1"></a>``) and a back-link arrow
-    (``↩``) pointing to the inline reference. Unnumbered footnotes
-    (the asterisk note, the abbreviation key list) get an anchor but
-    no back-link since nothing in the body refers to them.
-
-    The per-page ``### Page N`` subheaders keep their contents in
-    place because HTML anchors are not subject to the hoisting that
-    markdown ``[^id]: text`` definitions are.
+    Real numbered footnotes use standard markdown footnote syntax —
+    ``[^p018-1]: …`` — so a reader's markdown viewer (Obsidian, Pandoc,
+    GitHub) renders the inline ``[^p018-1]`` in the body as a
+    clickable superscript that jumps here. Unnumbered footnotes (the
+    asterisk note, the abbreviation key list) get markdown footnote
+    syntax too but with a ``u`` in the ID so it can't collide with a
+    real footnote on the same page; nothing in the body references
+    them, so they appear as standalone definitions at the end.
     """
     if not notes:
         return ""
@@ -284,13 +274,7 @@ def _render_footnotes_section(notes: List[Footnote]) -> str:
         for fn in by_page[page]:
             text = (fn.text or "").strip().replace("\n", " ")
             fid = _footnote_id(fn.page_num, fn.n, numbered=fn.is_numbered)
-            if fn.is_numbered:
-                parts.append(
-                    f'<a id="fn-{fid}"></a><sup>{fn.n}</sup>\u2003{text} '
-                    f'<a href="#fnref-{fid}">\u21a9</a>\n\n'
-                )
-            else:
-                parts.append(f'<a id="fn-{fid}"></a>{text}\n\n')
+            parts.append(f"[^{fid}]: {text}\n")
     return "".join(parts)
 
 
