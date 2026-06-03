@@ -100,12 +100,8 @@ def test_init_wiki_writes_full_scaffolding(tmp_path):
 
     # Subdirs
     for sub in ("articles", "people", "volumes", "sections",
-                "places", "topics", "_graph"):
+                "places", "topics", "regions", "_graph"):
         assert (wiki_root / sub).is_dir()
-    # regions/ is intentionally NOT a wiki subdir — figures render as text
-    # markers ("[Figure · id] description") instead of image embeds, so the
-    # wiki repo stays binary-free.
-    assert not (wiki_root / "regions").exists()
 
     # Corpus graph: bootstrapped with just the Series node
     corpus = json.loads((wiki_root / "_graph" / "corpus.jsonld").read_text(encoding="utf-8"))
@@ -167,9 +163,8 @@ def test_add_volume_writes_articles_people_volume_index(tmp_path):
     assert (wiki_root / "articles" / "pjb-048-2006-art01.md").exists()
     # Person copied
     assert (wiki_root / "people" / "wolff-jurgen.md").exists()
-    # Regions are deliberately NOT copied into the wiki (figures render as
-    # text markers, keeping the wiki repo binary-free).
-    assert not (wiki_root / "regions").exists()
+    # Region copied into a slug-scoped dir
+    assert (wiki_root / "regions" / "pjb-048-2006" / "p1_b001.png").exists()
     # Corpus graph now includes the article
     corpus = json.loads((wiki_root / "_graph" / "corpus.jsonld").read_text())
     ids = [n["@id"] for n in corpus["@graph"]]
@@ -181,9 +176,7 @@ def test_add_volume_writes_articles_people_volume_index(tmp_path):
     assert "pjb:art/pjb-048-2006-art01" in index
 
 
-def test_add_volume_renders_figures_as_text_markers(tmp_path):
-    """Figures used to be embedded as ![](../../regions/<id>.png) image refs;
-    they're now rendered as text markers so the wiki carries no binaries."""
+def test_add_volume_rewrites_figure_paths_in_articles(tmp_path):
     wiki_root = tmp_path / "wiki"
     init_wiki(wiki_root)
 
@@ -202,12 +195,10 @@ def test_add_volume_renders_figures_as_text_markers(tmp_path):
     add_volume(wiki_root, cfg.out_dir)
 
     art_text = (wiki_root / "articles" / "pjb-048-2006-art01.md").read_text(encoding="utf-8")
-    # Figure rendered as a blockquote text marker, NOT as an image embed.
-    assert "[Figure · p1_b001]" in art_text
-    assert "Caption text" in art_text
-    assert "../regions/" not in art_text
+    # The original per-volume ref was ../../regions/<id>.png. After
+    # add-volume, it should point at ../regions/<slug>/<id>.png.
+    assert "../regions/pjb-048-2006/p1_b001.png" in art_text
     assert "../../regions/" not in art_text
-    assert "![" not in art_text   # no markdown image syntax at all
 
 
 # ---------------------------------------------------------------------------

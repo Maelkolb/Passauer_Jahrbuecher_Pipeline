@@ -170,83 +170,15 @@ def _block_to_md(blk: dict) -> str:
     return f"{text}\n\n" if text else ""
 
 
-def _join_hyphenation(text: str) -> str:
-    """Stitch syllables broken by typographic hyphenation across paragraph
-    breaks within the same page.
-
-    German typesetting routinely breaks long words across a line with a
-    trailing hyphen ("verlie-") and continues on the next line ("henen
-    Stangenfeldzeichen…"). When those two pieces sit in adjacent blocks,
-    the wiki renders them as two paragraphs separated by a blank line —
-    leaving the reader to mentally rejoin "verliehenen".
-
-    We rejoin them here for the wiki specifically. The TEI and PageXML
-    emitters keep the original block boundaries, since they're meant to
-    reconstruct the page faithfully; the wiki is for reading.
-
-    Cross-page breaks (where a ``### Page N`` heading sits between the
-    pieces) are left alone — moving text across that boundary is
-    ambiguous and the reader can still parse it.
-    """
-    # word-character followed by "-" then a blank line then a lowercase
-    # letter (including German umlauts). Drop the hyphen and the blank.
-    return re.sub(
-        r"(\w)-\n\n([a-zäöüß])",
-        lambda m: m.group(1) + m.group(2),
-        text,
-    )
-
-
-def _render_footnotes_section(notes: List[Footnote]) -> str:
-    """Render the article's footnotes, grouped by source page.
-
-    Journal footnotes in this corpus restart numbering per page, so a
-    single flat ``1. … 2. …`` list ends up with multiple "1." entries
-    once you have more than one page of footnotes. Grouping by source
-    page preserves the original numbering scheme and makes the section
-    legible:
-
-        ## Footnotes
-
-        ### Page 18
-
-        1. Stoll, Integration und Abgrenzung 520 …
-        2. Zu Fahnentieren wichtig …
-
-        ### Page 19
-
-        3. Stoll, Heer und Gesellschaft …
-    """
-    if not notes:
-        return ""
-    by_page: Dict[Optional[int], List[Footnote]] = {}
-    for fn in notes:
-        by_page.setdefault(fn.page_num, []).append(fn)
-
-    parts: List[str] = ["\n## Footnotes\n"]
-    for page in sorted(by_page.keys(), key=lambda p: (p is None, p)):
-        if page is not None:
-            parts.append(f"\n### Page {page}\n\n")
-        else:
-            parts.append("\n### Unattributed\n\n")
-        for fn in by_page[page]:
-            text = (fn.text or "").strip().replace("\n", " ")
-            parts.append(f"{fn.n}. {text}\n")
-    return "".join(parts)
-
-
 def _render_article_body(article: dict, footnotes: List[Footnote]) -> str:
-    """Render the article's body (per-page) and footnotes (grouped by page).
+    """Render the article's body (per-page) and footnotes (collected).
 
     The body is structured as ``### Page N`` followed by the page's blocks
-    in document order. Typographic hyphens that split a word across
-    adjacent blocks within the same page are stitched back together
-    (``verlie-`` + ``henen Stangenfeldzeichen`` → ``verliehenen Stangenfeldzeichen``).
-
-    The first page typically opens with the article's section-header
-    repeating the title (which the TEI emitter strips); we keep it here
-    because the markdown reader has the article title only once, in the
-    H1 above the body, and a duplicate in-flow heading is survivable.
+    in document order. The first page typically opens with the article's
+    section-header repeating the title (which the TEI emitter strips); we
+    keep it here because the markdown reader has the article title only
+    once, in the H1 above the body, and a duplicate in-flow heading is
+    survivable.
     """
     parts: List[str] = []
     for pg in article.get("pages", []):
@@ -255,9 +187,15 @@ def _render_article_body(article: dict, footnotes: List[Footnote]) -> str:
             chunk = _block_to_md(blk)
             if chunk:
                 parts.append(chunk)
-    body = _join_hyphenation("".join(parts)).rstrip() + "\n"
+    body = "".join(parts).rstrip() + "\n"
 
-    body += _render_footnotes_section(footnotes)
+    if footnotes:
+        parts_fn = ["\n## Footnotes\n\n"]
+        for fn in footnotes:
+            text = (fn.text or "").strip().replace("\n", " ")
+            parts_fn.append(f"{fn.n}. {text}\n")
+        body += "".join(parts_fn)
+
     return body
 
 

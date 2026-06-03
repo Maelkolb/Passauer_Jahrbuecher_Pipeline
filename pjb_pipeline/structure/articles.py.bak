@@ -202,21 +202,16 @@ def _toc_driven(
             toc_end_pdf = toc_end + offset
             if pdf_pn <= toc_end_pdf <= page_last:
                 page_last = toc_end_pdf
-        # Refine the title via the in-page section-header anchor, but only
-        # when the on-page text is at least as long as the TOC title. The
-        # on-page version is often just the short headline ("Warum der
-        # Storch?") while the subtitle and the rest of the bibliographic
-        # title live in the TOC entry. The old code took only the first
-        # line of the anchor and overrode unconditionally, which truncated
-        # roughly 12 % of article titles across the corpus.
-        title = (entry.title or "").strip().rstrip(", .;:")
+        # Refine the title via the in-page section-header anchor if we can
+        # find one — it usually has the canonical capitalisation.
+        title = entry.title
         page = by_pn.get(pdf_pn)
         if page is not None:
             anchor = _find_anchor_on_pdf_page(page, entry.title)
             if anchor and anchor.get("text"):
-                anchor_text = " ".join(anchor["text"].split()).rstrip(", .;:")
-                if len(anchor_text) >= len(title):
-                    title = anchor_text
+                first_line = anchor["text"].split("\n")[0].strip()
+                if first_line:
+                    title = first_line
 
         articles.append({
             "id":         f"{cfg.slug}-art{i + 1:02d}",

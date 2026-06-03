@@ -20,7 +20,6 @@ from typing import List
 from tqdm.auto import tqdm
 
 from .config import VolumeConfig
-from .structure.columns import detect_columns, assign_columns, reading_order
 
 
 # Canonical type vocabulary used by every downstream emitter.
@@ -109,24 +108,13 @@ def build_unified_page(raw_doc: dict) -> dict:
             "text":     raw_doc["markdown"].strip(),
             "html":     "",
         })
-    page = {
+    return {
         "page_num":       raw_doc["page_num"],
         "image_filename": raw_doc["image_filename"],
         "image_width":    w,
         "image_height":   h,
         "blocks":         blocks,
     }
-    # Column-aware reading order. Without this, blocks come out interleaved
-    # on two-column pages (top-left, top-right, mid-left, mid-right …) so
-    # continuation sentences across columns end up out of order — most
-    # visibly when a hyphenated word's second half ("henen" in
-    # "verliehenen") appears before its first. Apply once here so every
-    # downstream emitter (wiki, TEI, PageXML, graph) reads correctly
-    # ordered blocks; HTML rendering re-detects columns for its own band
-    # layout, so input order doesn't affect it.
-    columns = detect_columns(page)
-    page["blocks"] = reading_order(assign_columns(page, columns), columns)
-    return page
 
 
 def run(cfg: VolumeConfig, pages: List[dict]) -> List[dict]:
