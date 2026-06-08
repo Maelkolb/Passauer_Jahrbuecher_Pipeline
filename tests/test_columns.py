@@ -247,3 +247,88 @@ class TestNarrowSectionHeaderIsColumnResident:
             "wide section-header (>60 % page width) must still be"
             " treated as spanning"
         )
+
+
+
+# ---------------------------------------------------------------------------
+# reading_order: column-major linearization regardless of Chandra's emission
+# ---------------------------------------------------------------------------
+
+class TestReadingOrderColumnMajor:
+    """Regression for the vol-52 p18 pattern.
+
+    Chandra does not reliably emit blocks in reading order on multi-column
+    pages: on p18 it read the top of the LEFT column, jumped to the RIGHT
+    column (continuation + all footnotes), then RETURNED to finish the
+    bottom of the LEFT column. The raw emission order therefore puts a
+    right-column continuation ("henen…", the second half of "verlie-")
+    immediately after the left-column intro, which is wrong. reading_order
+    must re-derive a column-major order: the entire LEFT column top to
+    bottom, then the entire RIGHT column, then the page footer — no matter
+    what order Chandra emitted the blocks in.
+    """
+
+    def _p18(self):
+        L, R = (80, 690), (770, 1390)
+        def b(bid, typ, y0, y1, col):
+            x0, x1 = (L if col == "L" else R)
+            return {"id": bid, "type": typ, "bbox": [x0, y0, x1, y1],
+                    "text": "", "html": ""}
+        return {"image_width": 1459, "image_height": 2192, "blocks": [
+            b("b001", "text", 247, 284, "L"),
+            b("b002", "section-header", 333, 379, "L"),
+            b("b003", "text", 418, 506, "L"),
+            b("b004", "image", 587, 826, "L"),
+            b("b005", "text", 583, 863, "L"),
+            b("b006", "text", 583, 745, "R"),
+            b("b007", "footnote", 800, 861, "R"),
+            b("b015", "footnote", 1457, 1937, "R"),
+            b("b016", "text", 1376, 1457, "L"),
+            b("b017", "text", 1457, 1937, "L"),
+            b("b018", "page-footer", 1974, 2016, "L"),
+        ]}
+
+    def test_left_column_reads_fully_before_right(self):
+        from pjb_pipeline.structure.columns import (
+            detect_columns, assign_columns, reading_order,
+        )
+        page = self._p18()
+        cols = detect_columns(page)
+        assert len(cols) == 2
+        order = [b["id"] for b in reading_order(assign_columns(page, cols), cols)]
+        i16 = order.index("b016")
+        i17 = order.index("b017")
+        i06 = order.index("b006")
+        assert i16 < i06, "left-column b016 must precede right-column b006"
+        assert i17 < i06, "left-column b017 must precede right-column b006"
+        assert order[-1] == "b018"
+        assert order.index("b005") < i16 < i17
+
+    def test_footer_is_last_not_first(self):
+        from pjb_pipeline.structure.columns import (
+            detect_columns, assign_columns, reading_order,
+        )
+        page = self._p18()
+        cols = detect_columns(page)
+        order = [b["id"] for b in reading_order(assign_columns(page, cols), cols)]
+        assert order[-1] == "b018"
+        assert order[0] == "b001"
+
+
+class TestReadingOrderFallbackTrustsChandra:
+    """When column detection bails (single-column page, or a page too
+    sparse to split), reading_order returns blocks in Chandra's own
+    emission order rather than re-sorting by y. On a genuine
+    single-column page this is identical to a y-sort; the point is that a
+    two-column page where detection failed degrades to Chandra's
+    mostly-correct order instead of a y-sort that interleaves columns."""
+
+    def test_no_columns_preserves_input_order(self):
+        from pjb_pipeline.structure.columns import reading_order
+        blocks = [
+            {"id": "a", "type": "text", "bbox": [100, 500, 600, 600]},
+            {"id": "b", "type": "text", "bbox": [100, 100, 600, 200]},
+            {"id": "c", "type": "text", "bbox": [100, 300, 600, 400]},
+        ]
+        out = [b["id"] for b in reading_order(blocks, [])]
+        assert out == ["a", "b", "c"]

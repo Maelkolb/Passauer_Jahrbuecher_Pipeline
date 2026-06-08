@@ -20,6 +20,7 @@ just respect the assignment for ordering.
 
 from __future__ import annotations
 
+import bisect
 from typing import List, Optional, Tuple
 
 
@@ -197,63 +198,62 @@ def assign_columns(page: dict, columns: List[Tuple[int, int]]) -> List[dict]:
 def reading_order(blocks: List[dict], columns: List[Tuple[int, int]]) -> List[dict]:
     """Sort blocks into natural reading order.
 
-    For a two-column page we now use a *band* layout: spanning blocks
-    (section headers, page header/footer, wide figures) act as horizontal
-    separators that split the page vertically. Inside each band, blocks
-    are read column-by-column, top-to-bottom. The reading sequence is::
+    Chandra emits blocks in a *mostly* reading-ordered sequence, but on
+    multi-column pages it is not reliable: it sometimes reads part of the
+    left column, jumps to the right column (and its footnotes), then
+    returns to finish the left column. So a pure "trust Chandra's order"
+    approach corrupts those pages (a sentence ending in "verlie-" at the
+    bottom-left would be followed by its other half "henen…" at the
+    top-right only if the two halves happen to be adjacent in Chandra's
+    emission — which they are not). We therefore re-derive the order
+    geometrically for multi-column pages.
 
-        [column-0 of band 1, column-1 of band 1, spanning block 1,
-         column-0 of band 2, column-1 of band 2, spanning block 2, …]
+    The rule is a single sort on the key ``(band, phase, column, y)``:
 
-    This preserves the vertical position of section headers (and other
-    spanning regions) instead of forcing them all to the top of the page.
+    * **band** — how many full-width *spanning* blocks (page header/footer,
+      title, TOC) sit above this block. Spanning blocks slice the page
+      into horizontal bands; within a band you read column-by-column.
+    * **phase / column** — inside a band, columnar blocks come first
+      (phase 0, ordered by ``column`` index 0, 1, … then ``y``), and a
+      spanning block comes last (phase 1) because it *closes* its band:
+      a page header sits above the body that follows it, a page footer
+      sits below the body that precedes it, and both fall out correctly
+      from "spanning block ends the band whose content is above it."
+    * **y** — top edge, so blocks within one column read top-to-bottom.
 
-    For a single-column page::
+    This is equivalent to the older explicit band-walk but expressed as
+    one comparison key, which is easier to reason about and impossible to
+    get out of sync between the "gather the band" and "emit the band"
+    halves of the previous implementation.
 
-        plain top-to-bottom
+    For a single-column page (or any page where column detection bailed),
+    we trust Chandra's own emission order rather than re-sorting by ``y``.
+    On a genuine single-column page Chandra already reads top-to-bottom,
+    so this is equivalent; on a two-column page where detection failed it
+    degrades to Chandra's mostly-correct order instead of a naive y-sort
+    that would interleave the columns line by line.
     """
     if not columns:
-        return sorted(blocks, key=lambda b: b["bbox"][1])
+        return list(blocks)
 
-    n_cols = len(columns)
-
-    spanning = sorted(
-        (b for b in blocks if b.get("_column") is None),
-        key=lambda b: b["bbox"][1],
-    )
-    columnar = sorted(
-        (b for b in blocks if b.get("_column") is not None),
-        key=lambda b: b["bbox"][1],
+    spanning_ys = sorted(
+        b["bbox"][1] for b in blocks if b.get("_column") is None
     )
 
-    out: List[dict] = []
-    col_cursor = 0
-    for spn in spanning:
-        spn_y = spn["bbox"][1]
-        # Collect all column blocks whose top edge is above this spanning
-        # block — they belong to the band sitting *above* it.
-        band: List[dict] = []
-        while (
-            col_cursor < len(columnar)
-            and columnar[col_cursor]["bbox"][1] < spn_y
-        ):
-            band.append(columnar[col_cursor])
-            col_cursor += 1
-        # Emit the band column-by-column, then the spanning block itself.
-        for i in range(n_cols):
-            for b in band:
-                if b.get("_column") == i:
-                    out.append(b)
-        out.append(spn)
+    def sort_key(b: dict):
+        y = b["bbox"][1]
+        col = b.get("_column")
+        # ``band`` = number of spanning blocks whose top edge is above this
+        # block (bisect_left, so a spanning block does not count itself).
+        band = bisect.bisect_left(spanning_ys, y)
+        if col is None:
+            # Spanning block closes its band: it comes after that band's
+            # columnar content (phase 1) and before the next band.
+            return (band, 1, 0, y)
+        # Columnar block: phase 0, ordered by column index then y.
+        return (band, 0, col, y)
 
-    # Trailing column blocks below the last spanning block.
-    trailing = columnar[col_cursor:]
-    for i in range(n_cols):
-        for b in trailing:
-            if b.get("_column") == i:
-                out.append(b)
-
-    return out
+    return sorted(blocks, key=sort_key)
 
 
 def band_layout(
