@@ -1,0 +1,44 @@
+# Vol LVIII (2016)
+# --- Source ----------------------------------------------------------
+pdf_path: "/home/tobias/2026-04-28_15-44_LVIII_2016_finished/pdf/2026-04-28_15-44_LVIII_2016.pdf"
+volume_number: 58
+volume_number_roman: "LVIII"
+volume_year: 2016
+
+# --- Bibliographic metadata ------------------------------------------
+volume_title: "Passauer Jahrbuch"
+volume_subtitle: "Beitraege zur Geschichte und Kultur Ostbaierns"
+publisher: "Verein fuer Ostbairische Heimatforschung"
+editor: "Institut fuer Kulturraumforschung Ostbaierns und der Nachbarregionen"
+language: "de"
+series_name: "Passauer Jahrbuecher"
+
+# --- Output ----------------------------------------------------------
+output_root: "./output"
+
+# --- Rendering -------------------------------------------------------
+render_dpi: 200
+page_range: null
+printed_page_offset: null
+
+# --- OCR backend -----------------------------------------------------
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1
+
+# --- Structure detection ---------------------------------------------
+toc_section_labels:
+  - "AUFSÄTZE"
+  - "BERICHTE"
+  - "MISZELLE"
+  - "REZENSIONEN"
+  - "BUCHBESPRECHUNGEN"
+  - "BIBLIOGRAPHIE"
+  - "NACHRUFE"
+  - "VEREINSCHRONIK"
+  - "MITARBEITER"
+
+# --- Misc ------------------------------------------------------------
+crop_regions: true
