@@ -1,0 +1,44 @@
+# Vol LX (2018)
+# --- Source ----------------------------------------------------------
+pdf_path: "/home/tobias/2026-04-28_13-01_LX_2018_finished/pdf/2026-04-28_13-01_LX_2018.pdf"
+volume_number: 60
+volume_number_roman: "LX"
+volume_year: 2018
+
+# --- Bibliographic metadata ------------------------------------------
+volume_title: "Passauer Jahrbuch"
+volume_subtitle: "Beitraege zur Geschichte und Kultur Ostbaierns"
+publisher: "Verein fuer Ostbairische Heimatforschung"
+editor: "Institut fuer Kulturraumforschung Ostbaierns und der Nachbarregionen"
+language: "de"
+series_name: "Passauer Jahrbuecher"
+
+# --- Output ----------------------------------------------------------
+output_root: "./output"
+
+# --- Rendering -------------------------------------------------------
+render_dpi: 200
+page_range: null
+printed_page_offset: null
+
+# --- OCR backend -----------------------------------------------------
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1
+
+# --- Structure detection ---------------------------------------------
+toc_section_labels:
+  - "AUFSÄTZE"
+  - "BERICHTE"
+  - "MISZELLE"
+  - "REZENSIONEN"
+  - "BUCHBESPRECHUNGEN"
+  - "BIBLIOGRAPHIE"
+  - "NACHRUFE"
+  - "VEREINSCHRONIK"
+  - "MITARBEITER"
+
+# --- Misc ------------------------------------------------------------
+crop_regions: true
