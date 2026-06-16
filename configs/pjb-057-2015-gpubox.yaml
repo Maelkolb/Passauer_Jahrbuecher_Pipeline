@@ -1,10 +1,9 @@
-# Copy this file for each new volume — only the top half typically changes.
-
+# Vol LVII (2015)
 # --- Source ----------------------------------------------------------
-pdf_path: "/home/tobias/2026-05-12_11-59_XLIX_2007_finished/pdf/2026-05-12_11-59_XLIX_2007_new.pdf"
-volume_number: 49
-volume_number_roman: "XLIX"
-volume_year: 2007
+pdf_path: "/home/tobias/2026-05-05_11-52_LVII_2015_finished/pdf/2026-05-05_11-52_LVII_2015.pdf"
+volume_number: 57
+volume_number_roman: "LVII"
+volume_year: 2015
 
 # --- Bibliographic metadata ------------------------------------------
 volume_title: "Passauer Jahrbuch"
@@ -14,36 +13,26 @@ editor: "Institut fuer Kulturraumforschung Ostbaierns und der Nachbarregionen"
 language: "de"
 series_name: "Passauer Jahrbuecher"
 
-# --- Output (also override-able with --output-root on the CLI) -------
+# --- Output ----------------------------------------------------------
 output_root: "./output"
 
 # --- Rendering -------------------------------------------------------
 render_dpi: 200
-# Pages to process, 1-indexed inclusive. Set to ~null to process the whole book.
-# Use this for testing: small range = small bill.
 page_range: null
-
-# Set this if you know the offset between PDF page indices and printed
-# page numbers; leave null and the pipeline will try to infer it from
-# page-header text.
 printed_page_offset: null
 
 # --- OCR backend -----------------------------------------------------
-# method: "hf"   — load Chandra into local GPU memory (the Colab path)
-# method: "vllm" — talk to a vLLM server. Set vllm_url for a remote one;
-#                  leave it null when vLLM is running on localhost:8000.
 ocr:
   method: "vllm"
-  vllm_url: "http://localhost:8000/v1"   # e.g. "http://your-gpu-box:8000/v1"
+  vllm_url: "http://localhost:8000/v1"
   model: "datalab-to/chandra"
   batch_size: 1
 
 # --- Structure detection ---------------------------------------------
-# Uppercase headings used by Passauer Jahrbücher to group the TOC.
-# Add any new ones a volume introduces.
 toc_section_labels:
   - "AUFSÄTZE"
   - "BERICHTE"
+  - "MISZELLE"
   - "REZENSIONEN"
   - "BUCHBESPRECHUNGEN"
   - "BIBLIOGRAPHIE"

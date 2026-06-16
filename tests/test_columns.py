@@ -332,3 +332,86 @@ class TestReadingOrderFallbackTrustsChandra:
         ]
         out = [b["id"] for b in reading_order(blocks, [])]
         assert out == ["a", "b", "c"]
+
+
+
+# ---------------------------------------------------------------------------
+# Masthead preamble: byline + title above the body must span and read first
+# ---------------------------------------------------------------------------
+
+class TestMastheadPreamble:
+    """Regression for the vol-56 p84/p104 pattern.
+
+    On an article's first page a centred author byline and title sit above
+    the two-column body. Being centred, they straddle the gutter; the old
+    code let them corrupt gutter detection and then assigned them to the
+    right column, so they read AFTER a whole column of body text. They must
+    instead be recognised as full-width preamble (because they lie entirely
+    above where the two columns begin) and read first.
+    """
+
+    def _first_page(self):
+        def b(bid, typ, x0, y0, x1, y1):
+            return {"id": bid, "type": typ, "bbox": [x0, y0, x1, y1],
+                    "text": "", "html": ""}
+        return {"image_width": 1470, "image_height": 2198, "blocks": [
+            b("b001", "text",           480, 257,  906, 292),
+            b("b002", "section-header", 504, 340,  883, 391),
+            b("b003", "text",            66, 586,  685, 1261),
+            b("b004", "text",            66, 1263, 685, 1938),
+            b("b005", "text",           701, 589, 1331, 1063),
+            b("b006", "text",           701, 1063, 1330, 1184),
+            b("b007", "footnote",       701, 1327, 1330, 1386),
+            b("b008", "page-footer",    945, 1978, 1330, 2019),
+        ]}
+
+    def test_byline_and_title_span_and_read_first(self):
+        from pjb_pipeline.structure.columns import (
+            detect_columns, assign_columns, reading_order,
+        )
+        page = self._first_page()
+        cols = detect_columns(page)
+        assert len(cols) == 2
+        ann = assign_columns(page, cols)
+        bycol = {b["id"]: b.get("_column") for b in ann}
+        assert bycol["b001"] is None, "byline must span, not be in a column"
+        assert bycol["b002"] is None, "title must span, not be in a column"
+        assert bycol["b003"] == 0 and bycol["b005"] == 1
+        order = [b["id"] for b in reading_order(ann, cols)]
+        assert order[0] == "b001" and order[1] == "b002", \
+            f"byline+title must read first, got {order[:3]}"
+        assert order.index("b003") < order.index("b005")
+
+    def test_gutter_not_dragged_by_centred_preamble(self):
+        from pjb_pipeline.structure.columns import detect_columns
+        cols = detect_columns(self._first_page())
+        (l0, l1), (r0, r1) = cols
+        assert l1 < 700 and r0 > 690, f"gutter dragged off the body: {cols}"
+
+
+class TestMidColumnSubheadStaysInColumn:
+    """A section header *inside* the columnar region must remain
+    column-resident — preserving the v3 fix. Distinguished from a masthead
+    purely by vertical position."""
+
+    def test_subhead_below_body_top_is_not_masthead(self):
+        from pjb_pipeline.structure.columns import (
+            detect_columns, assign_columns,
+        )
+        def b(bid, typ, x0, y0, x1, y1):
+            return {"id": bid, "type": typ, "bbox": [x0, y0, x1, y1],
+                    "text": "", "html": ""}
+        page = {"image_width": 1459, "image_height": 2192, "blocks": [
+            b("b001", "text",            80, 267,  690, 1100),
+            b("b002", "section-header",  80, 1139, 690, 1223),
+            b("b003", "text",            80, 1220, 690, 1939),
+            b("b004", "text",           770, 267, 1380, 705),
+            b("b005", "text",           770, 705, 1380, 986),
+            b("b006", "footnote",       770, 1041, 1380, 1300),
+            b("b007", "page-footer",    600, 1990, 860, 2023),
+        ]}
+        cols = detect_columns(page)
+        ann = assign_columns(page, cols)
+        bycol = {b["id"]: b.get("_column") for b in ann}
+        assert bycol["b002"] == 0, \
+            f"mid-column subhead should stay in col 0, got {bycol['b002']}"

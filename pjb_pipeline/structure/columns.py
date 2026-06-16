@@ -46,6 +46,45 @@ _SPANNING_TYPES = {
 }
 
 
+def _masthead_top(blocks: List[dict]) -> Optional[float]:
+    """Y at which the multi-column body begins, or ``None`` if there is no
+    side-by-side region (single-column page).
+
+    Found as the highest point where two non-spanning blocks sit *side by
+    side* — one entirely left of the other, overlapping vertically. That is
+    where the columnar body starts. Anything whose whole height is above
+    this line is page *preamble*: a centred author byline or article title
+    sitting above the columns on the first page of an article. Such blocks
+    are typically centred across the gutter, which both corrupts gutter
+    detection and gets them mis-assigned to one column (so they read after
+    a whole column of body text). Detecting them by position lets us span
+    them instead.
+
+    This is deliberately position-based, not type-based: a section header
+    *inside* the columnar region (a mid-page subhead) is below this line
+    and is left in its column, preserving the v3 behaviour.
+    """
+    top: Optional[float] = None
+    n = len(blocks)
+    for i in range(n):
+        a = blocks[i]
+        if a.get("type") in _SPANNING_TYPES:
+            continue
+        ax0, ay0, ax1, ay1 = a["bbox"][:4]
+        for j in range(i + 1, n):
+            b = blocks[j]
+            if b.get("type") in _SPANNING_TYPES:
+                continue
+            bx0, by0, bx1, by1 = b["bbox"][:4]
+            if min(ay1, by1) <= max(ay0, by0):   # no vertical overlap
+                continue
+            if ax1 <= bx0 or bx1 <= ax0:          # side by side
+                pair_top = min(ay0, by0)
+                if top is None or pair_top < top:
+                    top = pair_top
+    return top
+
+
 def detect_columns(
     page: dict,
     *,
@@ -81,7 +120,10 @@ def detect_columns(
         return []
 
     # Candidate column-resident blocks: things narrower than the threshold
-    # that aren't already known to span.
+    # that aren't already known to span, and that aren't page preamble
+    # (a centred byline/title above the body would otherwise straddle the
+    # gutter and drag the detected midline off the true column boundary).
+    split_y = _masthead_top(blocks)
     candidates = []
     for b in blocks:
         if b.get("type") in _SPANNING_TYPES:
@@ -89,6 +131,8 @@ def detect_columns(
         x1, _y1, x2, _y2 = b["bbox"][:4]
         if (x2 - x1) > W * width_threshold:
             continue
+        if split_y is not None and b["bbox"][3] <= split_y:
+            continue  # masthead preamble — not part of a column
         candidates.append(b)
 
     if len(candidates) < min_blocks_per_column * 2:
@@ -152,10 +196,19 @@ def assign_columns(page: dict, columns: List[Tuple[int, int]]) -> List[dict]:
     if not columns or W <= 0:
         return [{**b, "_column": None} for b in page.get("blocks", [])]
 
+    # Page preamble (centred byline/title above the columnar body) spans the
+    # full width and must read before either column, not be folded into one.
+    split_y = _masthead_top(page.get("blocks", []))
+
     out = []
     for b in page.get("blocks", []):
         # Spanning types always span
         if b.get("type") in _SPANNING_TYPES:
+            out.append({**b, "_column": None})
+            continue
+
+        # Masthead preamble (entirely above where the two columns begin)
+        if split_y is not None and b["bbox"][3] <= split_y:
             out.append({**b, "_column": None})
             continue
 
