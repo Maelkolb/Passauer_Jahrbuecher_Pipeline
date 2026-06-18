@@ -1,0 +1,31 @@
+# Vol LXV (2023)
+pdf_path: "/home/tobias/2026-04-28_11-05_LXV_2023_finished/pdf/2026-04-28_11-05_LXV_2023.pdf"
+volume_number: 65
+volume_number_roman: "LXV"
+volume_year: 2023
+volume_title: "Passauer Jahrbuch"
+volume_subtitle: "Beitraege zur Geschichte und Kultur Ostbaierns"
+publisher: "Verein fuer Ostbairische Heimatforschung"
+editor: "Institut fuer Kulturraumforschung Ostbaierns und der Nachbarregionen"
+language: "de"
+series_name: "Passauer Jahrbuecher"
+output_root: "./output"
+render_dpi: 200
+page_range: null
+printed_page_offset: null
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1
+toc_section_labels:
+  - "AUFSÄTZE"
+  - "BERICHTE"
+  - "MISZELLE"
+  - "REZENSIONEN"
+  - "BUCHBESPRECHUNGEN"
+  - "BIBLIOGRAPHIE"
+  - "NACHRUFE"
+  - "VEREINSCHRONIK"
+  - "MITARBEITER"
+crop_regions: true
