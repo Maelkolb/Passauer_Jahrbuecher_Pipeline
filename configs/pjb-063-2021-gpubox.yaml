@@ -1,0 +1,31 @@
+# Vol LXIII (2021)
+pdf_path: "/home/tobias/2026-07-16_15-34_LXIII_2021_finished/pdf/2026-07-16_15-34_LXIII_2021.pdf"
+volume_number: 63
+volume_number_roman: "LXIII"
+volume_year: 2021
+volume_title: "Passauer Jahrbuch"
+volume_subtitle: "Beitraege zur Geschichte und Kultur Ostbaierns"
+publisher: "Verein fuer Ostbairische Heimatforschung"
+editor: "Institut fuer Kulturraumforschung Ostbaierns und der Nachbarregionen"
+language: "de"
+series_name: "Passauer Jahrbuecher"
+output_root: "./output"
+render_dpi: 200
+page_range: null
+printed_page_offset: null
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1
+toc_section_labels:
+  - "AUFSÄTZE"
+  - "BERICHTE"
+  - "MISZELLE"
+  - "REZENSIONEN"
+  - "BUCHBESPRECHUNGEN"
+  - "BIBLIOGRAPHIE"
+  - "NACHRUFE"
+  - "VEREINSCHRONIK"
+  - "MITARBEITER"
+crop_regions: true
