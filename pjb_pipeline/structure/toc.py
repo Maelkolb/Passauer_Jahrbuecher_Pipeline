@@ -25,7 +25,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Iterable, Set, Tuple
 
 from .names import (
-    EntryParse, NameResolver, base_given_names, paragraphs_from_block,
+    NameResolver, base_given_names, paragraphs_from_block,
     parse_contributor_entries, split_entry,
 )
 

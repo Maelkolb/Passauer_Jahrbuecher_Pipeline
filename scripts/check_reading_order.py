@@ -114,7 +114,7 @@ def main() -> None:
     print(f"Pages scanned: {len(pages)}")
     print(f"Print size: body {typo.body:.2f}, footnotes {typo.small:.2f} chars/kpx² "
           f"(threshold {typo.threshold:.2f})")
-    print(f"Blocks re-labelled: " + (", ".join(f"text → {k}: {v}" for k, v in reclass.items())
+    print("Blocks re-labelled: " + (", ".join(f"text → {k}: {v}" for k, v in reclass.items())
                                      or "none"))
     print(f"Pages where the reading order differs from Chandra's: {len(moved)}"
           + (f"  ({', '.join(f'{k} {v}' for k, v in strategies.most_common())})" if moved else ""))

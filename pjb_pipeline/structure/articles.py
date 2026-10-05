@@ -507,7 +507,6 @@ def _toc_driven(
 
     articles: List[dict] = []
     first_pdf = unified_pages[0]["page_num"]
-    last_pdf = unified_pages[-1]["page_num"]
 
     # Frontmatter — everything before the first article start
     if (anchors[0]["page"], anchors[0]["index"]) > (first_pdf, 0):
