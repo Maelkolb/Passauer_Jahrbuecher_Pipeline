@@ -527,3 +527,15 @@ def test_several_authors_get_one_person_page_each(tmp_path):
     assert people == ["malte-rehbein.md", "nina-kunze.md", "sebastian-gassner.md"]
     body = _body(cfg.wiki_dir / "articles" / "pjb-048-2006-art02.md")
     assert "**Sebastian Gassner / Nina Kunze / Malte Rehbein**" in body
+
+
+def test_rerun_removes_pages_that_are_no_longer_produced(tmp_path):
+    cfg = _cfg(tmp_path)
+    art = _article("pjb-048-2006-art01", 1, "T", 1, 1, pages=[_page(1, [_block("b", "text", "x")])])
+    art["authors"] = ["Wolf"]
+    wiki.run(cfg, [art], art["pages"], toc=None)
+    assert (cfg.wiki_dir / "people" / "wolf.md").exists()
+    art["authors"] = ["Hartmut Wolff"]
+    wiki.run(cfg, [art], art["pages"], toc=None)
+    assert not (cfg.wiki_dir / "people" / "wolf.md").exists()
+    assert (cfg.wiki_dir / "people" / "hartmut-wolff.md").exists()

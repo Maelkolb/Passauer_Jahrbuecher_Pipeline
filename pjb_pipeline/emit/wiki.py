@@ -773,6 +773,7 @@ def run(
         _write_volume_md(cfg, vol_node, articles, sections_order)
 
     # 2) Article pages
+    written = set()
     for node in _nodes_by_type(doc, "ScholarlyArticle"):
         art_id = node["@id"].split("pjb:art/", 1)[-1]
         art = articles_by_id.get(art_id)
@@ -780,12 +781,22 @@ def run(
             continue
         notes = (footnotes_by_article or {}).get(art_id, []) or []
         _write_article_md(cfg, node, art, notes)
+        written.add(cfg.wiki_dir / "articles" / f"{art_id}.md")
         n_articles += 1
 
     # 3) Person pages
     for node in _nodes_by_type(doc, "Person"):
         _write_person_md(cfg, node, arts_by_person)
+        written.add(cfg.wiki_dir / "people" / f"{node['@id'].split('pjb:person/', 1)[-1]}.md")
         n_people += 1
+
+    # Pages of an earlier run that this run no longer produces (changed
+    # article boundaries, corrected author names) must not linger in the
+    # staging directory — add-volume copies everything it finds there.
+    for sub in ("articles", "people"):
+        for f in (cfg.wiki_dir / sub).glob("*.md"):
+            if f not in written:
+                f.unlink()
 
     print(f"   wrote {cfg.wiki_dir}  "
           f"(volume.md + {n_articles} articles, {n_people} people)")

@@ -815,11 +815,16 @@ def run(
     # Articles
     arts_dir = cfg.html_dir / "articles"
     arts_dir.mkdir(parents=True, exist_ok=True)
+    written = set()
     for a in articles:
         notes = footnotes_by_article.get(a["id"], [])
         h = build_article_html(cfg, a, articles, notes)
         if h:
             (arts_dir / f"{a['id']}.html").write_text(h, encoding="utf-8")
+            written.add(f"{a['id']}.html")
+    for f in arts_dir.glob("*.html"):
+        if f.name not in written:
+            f.unlink()          # article of an earlier run with other boundaries
 
     # Page facsimile views
     pages_dir = cfg.html_dir / "pages"
