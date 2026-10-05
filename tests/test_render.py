@@ -99,3 +99,21 @@ def test_pdf_path_is_still_accepted():
     cfg = VolumeConfig(pdf_path="/x/book.pdf", volume_number=1, volume_number_roman="I",
                        volume_year=1959)
     assert cfg.source == "/x/book.pdf" and cfg.source_path == "/x/book.pdf"
+
+
+def test_bundle_follows_symlinked_pages(tmp_path):
+    import os
+    import zipfile
+    from pjb_pipeline.pipeline import bundle_output
+    scans = tmp_path / "elsewhere"
+    scans.mkdir()
+    (scans / "page_0001.png").write_bytes(b"png")
+    cfg = VolumeConfig(volume_number=56, volume_number_roman="LVI", volume_year=2014,
+                       source_path="x.pdf", output_root=str(tmp_path / "out"))
+    cfg.out_dir.mkdir(parents=True)
+    os.symlink(scans, cfg.out_dir / "pages")
+    (cfg.out_dir / "tei").mkdir()
+    (cfg.out_dir / "tei" / "x.xml").write_text("<TEI/>")
+    names = zipfile.ZipFile(bundle_output(cfg)).namelist()
+    assert "pjb-056-2014/pages/page_0001.png" in names
+    assert "pjb-056-2014/tei/x.xml" in names

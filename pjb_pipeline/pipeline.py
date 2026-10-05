@@ -8,6 +8,7 @@ images) to bundled output, recording timings and writing all artefacts to
 from __future__ import annotations
 
 import json
+import os
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,25 @@ from .structure.footnotes import link_article_footnotes
 # ``assets/`` directory next to the package. The CLI overrides this if the
 # user supplies ``--assets``.
 DEFAULT_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+
+
+def bundle_output(cfg: VolumeConfig) -> Path:
+    """Zip the volume's output directory to ``<output_root>/<slug>.zip``.
+
+    Symlinked sub-directories are followed (``pages/`` may live on another
+    disk), so the bundle always carries the page scans that the TEI
+    facsimile, PageXML and graph ``facsimile`` links point to.
+    """
+    bundle_path = Path(cfg.output_root) / f"{cfg.slug}.zip"
+    if bundle_path.exists():
+        bundle_path.unlink()
+    with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for root, dirs, files in os.walk(cfg.out_dir, followlinks=True):
+            dirs.sort()
+            for name in sorted(files):
+                p = Path(root) / name
+                zf.write(p, p.relative_to(cfg.out_dir.parent))
+    return bundle_path
 
 
 def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
@@ -126,13 +146,7 @@ def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
         )
 
     with stage("Bundle output", timings):
-        bundle_path = Path(cfg.output_root) / f"{cfg.slug}.zip"
-        if bundle_path.exists():
-            bundle_path.unlink()
-        with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for p in cfg.out_dir.rglob("*"):
-                if p.is_file():
-                    zf.write(p, p.relative_to(cfg.out_dir.parent))
+        bundle_path = bundle_output(cfg)
         size_mb = bundle_path.stat().st_size / 1e6
         print(f"   wrote {bundle_path}  ({size_mb:.1f} MB)")
 
