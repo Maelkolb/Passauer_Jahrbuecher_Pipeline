@@ -17,12 +17,15 @@ import html as html_module
 import json
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from tqdm.auto import tqdm
 
 from .config import VolumeConfig
-from .structure.columns import detect_columns, assign_columns, reading_order
+from .structure.layout import (
+    DEFAULT_TYPOGRAPHY, Typography, calibrate, last_body_block, order_page,
+    reclassify_blocks,
+)
 
 # Visual block types whose Chandra-generated alt-text description we want
 # to surface as a first-class ``description`` field. The graph emitter and
@@ -113,8 +116,22 @@ def to_pixel_bbox(bbox, w, h) -> List[int]:
     return [int(round(v)) for v in (x1, y1, x2, y2)]
 
 
-def build_unified_page(raw_doc: dict) -> dict:
-    """Turn the raw Chandra-per-page JSON into a unified page dict."""
+def build_unified_page(
+    raw_doc: dict,
+    *,
+    typography: Optional[Typography] = None,
+    prev_tail: Optional[dict] = None,
+    layout: bool = True,
+) -> dict:
+    """Turn the raw Chandra-per-page JSON into a unified page dict.
+
+    With ``layout=True`` (the default) the page also goes through layout
+    analysis: block roles are corrected using ``typography`` (see
+    :func:`pjb_pipeline.structure.layout.calibrate`; a corpus default is
+    used when omitted) and the blocks are put into reading order, taking
+    ``prev_tail`` — the previous page's last body block — into account.
+    The layout report lands in ``page["_layout"]``.
+    """
     w, h = raw_doc["image_width"], raw_doc["image_height"]
     blocks = []
     for b in raw_doc.get("blocks", []):
@@ -155,16 +172,26 @@ def build_unified_page(raw_doc: dict) -> dict:
         "image_height":   h,
         "blocks":         blocks,
     }
-    # Column-aware reading order. Without this, blocks come out interleaved
-    # on two-column pages (top-left, top-right, mid-left, mid-right …) so
-    # continuation sentences across columns end up out of order — most
-    # visibly when a hyphenated word's second half ("henen" in
-    # "verliehenen") appears before its first. Apply once here so every
-    # downstream emitter (wiki, TEI, PageXML, graph) reads correctly
-    # ordered blocks; HTML rendering re-detects columns for its own band
-    # layout, so input order doesn't affect it.
-    columns = detect_columns(page)
-    page["blocks"] = reading_order(assign_columns(page, columns), columns)
+    if layout:
+        apply_layout(page, typography or DEFAULT_TYPOGRAPHY, prev_tail=prev_tail)
+    return page
+
+
+def apply_layout(page: dict, typography: Typography, *,
+                 prev_tail: Optional[dict] = None,
+                 prev_footnote: Optional[dict] = None) -> dict:
+    """Correct block roles and set the reading order of one unified page.
+
+    Applied once here so every downstream emitter (wiki, TEI, PageXML,
+    graph) reads correctly typed, correctly ordered blocks; the HTML
+    facsimile re-detects columns for its own band layout.
+    """
+    chandra_ids = [b["id"] for b in page["blocks"]]
+    changes = reclassify_blocks(page, typography, prev_footnote=prev_footnote)
+    report = order_page(page, prev_tail=prev_tail, chandra_order=chandra_ids)
+    report["reclassified"] = [list(c) for c in changes]
+    report["moved"] = chandra_ids != [b["id"] for b in page["blocks"]]
+    page["_layout"] = report
     return page
 
 
@@ -174,7 +201,39 @@ def run(cfg: VolumeConfig, pages: List[dict]) -> List[dict]:
     unified: List[dict] = []
     for rec in tqdm(pages, desc="unify", unit="pg"):
         raw = json.loads((cfg.interim_dir / f"page_{rec['page_num']:04d}.json").read_text())
-        unified.append(build_unified_page(raw))
+        unified.append(build_unified_page(raw, layout=False))
+
+    # Layout analysis: calibrate print sizes on the whole volume, then fix
+    # block roles and reading order page by page (the previous page's last
+    # body block takes part in the next page's ordering decision).
+    typo = calibrate(unified)
+    prev_tail = None
+    prev_footnote = None
+    layout_log = []
+    for page in unified:
+        apply_layout(page, typo, prev_tail=prev_tail, prev_footnote=prev_footnote)
+        prev_tail = last_body_block(page) or prev_tail
+        notes = [b for b in page["blocks"] if b["type"] == "footnote"]
+        prev_footnote = notes[-1] if notes else None
+        rep = page.pop("_layout")
+        layout_log.append({"page_num": page["page_num"], **rep})
+    n_fn = sum(1 for r in layout_log for c in r["reclassified"] if c[2] == "footnote")
+    n_cap = sum(1 for r in layout_log for c in r["reclassified"] if c[2] == "caption")
+    strategies: dict = {}
+    for r in layout_log:
+        if r["moved"]:
+            strategies[r["strategy"]] = strategies.get(r["strategy"], 0) + 1
+    print(f"   typography: body {typo.body:.2f}, footnote {typo.small:.2f} "
+          f"chars/kpx² → threshold {typo.threshold:.2f}")
+    print(f"   reclassified: {n_fn} text → footnote, {n_cap} text → caption")
+    print(f"   reading order differs from Chandra on "
+          f"{sum(1 for r in layout_log if r['moved'])} pages "
+          f"({', '.join(f'{k}: {v}' for k, v in sorted(strategies.items()))}; "
+          f"{sum(1 for r in layout_log if r['repaired'])} repaired by text continuity)")
+    (cfg.logs_dir / "layout.json").write_text(json.dumps(
+        {"typography": typo.as_dict(), "pages": layout_log},
+        ensure_ascii=False, indent=1,
+    ))
 
     (cfg.logs_dir / "unified.json").write_text(
         json.dumps(unified, ensure_ascii=False, indent=2)

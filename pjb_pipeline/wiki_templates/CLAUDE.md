@@ -11,7 +11,8 @@ history and culture of Ostbaiern (Eastern Bavaria), published since
 1948 by the Verein für Ostbairische Heimatforschung.
 
 Each volume is processed by the [Passauer Jahrbücher Pipeline]
-(scanned PDF → Chandra OCR → article boundaries → TEI/JSON-LD/HTML).
+(scanned book PDF or page images → Chandra OCR → layout analysis →
+article boundaries → TEI/JSON-LD/HTML).
 The pipeline emits **structural facts**; this wiki layers **content**
 on top: summaries, themes, cross-references, the connections that
 make a scholarly corpus actually navigable.
@@ -69,7 +70,8 @@ Each article page is structured:
 ```
 # <Title>
 
-**<Author>** · <Section> · pp. X–Y
+**<Author> / <Co-author> …** · <Section> · pp. X–Y
+Review of: *<Book authors>: <Book title>*      ← only on book reviews
 
 ## Summary       ← agent-owned. The single most valuable thing you write.
 ## Mentions      ← agent-owned. Bullet list of named entities (people, places, topics, works).
@@ -81,6 +83,28 @@ Each article page is structured:
 The pipeline preserves Summary, Mentions, and Notes on re-emit. It will
 regenerate Full Text and Footnotes. If you put content in the wrong
 section it will be erased on the next `add-volume` run.
+
+How to read `## Full Text`:
+
+- It holds exactly this article's text: where several articles share a
+  printed page (the end of one and the start of the next, or several book
+  reviews on one page), the page is split between them.
+- The text runs on continuously. Paragraphs broken by a column or page end
+  are re-joined (typographic hyphens removed). Page starts are marked in
+  place as `*[p. N]*` (PDF page numbers, with an `#page-N` anchor) — inside
+  a sentence when the sentence runs across the page break. Cite pages by
+  these markers.
+- Figures appear as `> **[Image · <block-id>]** <description>` followed by
+  their caption; a figure that interrupts a sentence is placed after the
+  paragraph.
+- Footnote numbers in the text link to `## Footnotes`, grouped by page
+  because the journal numbers notes per article but prints them per page.
+
+Authors: the frontmatter `author` lists every author as its own Person
+`@id`. For a book review (`@type: [ScholarlyArticle, Review]`) the author
+is the *reviewer*; the reviewed book, its authors and editors are in
+`itemReviewed`, and the reviewed authors' person pages list the review as
+"reviewed book".
 
 ## Operations
 

@@ -22,7 +22,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field, asdict
-from typing import List, Optional, Iterable, Tuple
+from typing import Dict, List, Optional, Iterable, Set, Tuple
+
+from .names import (
+    NameResolver, base_given_names, paragraphs_from_block,
+    parse_contributor_entries, split_entry,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +43,16 @@ class TocEntry:
     page:        Optional[int]          # printed page number ("9" → 9)
     page_end:    Optional[int] = None   # if range "9-42"
     section:     str = ""               # "Aufsätze" / "Berichte" / …
+    # Individual persons. ``author`` above is the display string
+    # ("Hartmut Wolff / Walter Wandling"); ``authors`` is the list the
+    # knowledge graph uses. For a book review the authors are the
+    # *reviewers*, and the reviewed book's people sit in ``reviewed_*``.
+    authors:          List[str] = field(default_factory=list)
+    editors:          List[str] = field(default_factory=list)
+    is_review:        bool = False
+    reviewed_title:   str = ""
+    reviewed_authors: List[str] = field(default_factory=list)
+    reviewed_editors: List[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -66,8 +81,52 @@ class TocStructure:
 
 # "...N" or ". . . . N" or page ranges "...N-M"
 _PAGE_MARKER = re.compile(
-    r"\s*\.{2,}\s*(\d{1,4}(?:[\u2013\-]\d{1,4})?)\s*"
+    r"\s*(?:\.{2,}|(?:\.\s){2,}\.)\s*(\d{1,4}(?:[\u2013\-]\d{1,4})?)\s*"
 )
+
+# A bare page number that ends an entry: followed by the next entry's
+# "Name Name:" or by the end of the text. Only used when a TOC block has
+# no dot leaders at all.
+_BARE_PAGE = re.compile(
+    r"(?<=\S)\s+(\d{1,3})(?=\s+[A-ZÄÖÜ][\w'’\-]*\.?"
+    r"(?:(?:\s+|,\s*|\s*/\s*)(?:[A-ZÄÖÜ][\w'’\-]*\.?|von|van|de|zu|der|und|u\.)){0,8}\s*:\s|\s*$)"
+)
+
+_BARE_NUM = re.compile(r"(?<=\S)\s+(\d{1,3})(?=\s+[A-ZÄÖÜ„»\"]|\s*$)")
+_NUM_CONTEXT = re.compile(r"(?:Band|Bd\.|Bde\.|Heft|Nr\.|Teil|S\.|Folge|Jg\.|Jahrgang|Abb\.|Tafel|Kap\.)\s*$")
+
+
+def _insert_leaders_at_bare_pages(work: str, weak: bool = True) -> str:
+    """Turn bare page numbers that close a TOC entry into dot leaders.
+
+    A number counts when it is followed by the next entry's "Name:" (the
+    strong signal), or — failing that — when it continues the increasing
+    page sequence, is followed by a capitalised word, and is not part of a
+    citation ("Band 4", "Heft 1")."""
+    out: List[str] = []
+    pos = 0
+    last = 0
+    for m in _BARE_NUM.finditer(work):
+        n = int(m.group(1))
+        before = work[:m.start()]
+        if re.search(r"\.\s?\.\s*$", before):
+            continue  # already has dot leaders
+        if before[-1:].isdigit() and not re.search(r"(?<!\d)\d{4}$", before):
+            continue  # "1918/19 bis 1933" — only a year may precede the page
+        strong = bool(_BARE_PAGE.match(work, m.start())) or (
+            before[-1:].isdigit() and not work[m.end():].strip()[:1].isdigit())
+        if not strong:
+            if not weak or n < max(5, last) or _NUM_CONTEXT.search(work[:m.start()]):
+                continue
+            if last and n - last > 60:
+                continue
+        out.append(work[pos:m.start()])
+        out.append(f" ..... {m.group(1)} ")
+        pos = m.end()
+        last = max(last, n)
+    out.append(work[pos:])
+    return "".join(out)
+
 
 # An UPPERCASE run of 3+ chars at the start of a chunk, optionally with
 # spaces, immediately followed (after optional whitespace) by a Title-Case
@@ -96,9 +155,18 @@ def parse_toc_text(text: str) -> List[dict]:
     head_split = work.split("\n", 1)
     if len(head_split) == 2:
         first = head_split[0].strip()
-        if first and first.isupper() and 2 <= len(first) <= 30:
+        # Only a bare heading ("INHALT") is the title — not the first entry
+        # ("MITARBEITER ..... 7"), whose page number sits on the next line.
+        if (first and first.isupper() and 2 <= len(first) <= 30
+                and ".." not in first and not re.search(r"\d", first)):
             out.append({"kind": "title", "text": first, "page": None})
             work = head_split[1]
+
+    # Some TOC lines lack dot leaders ("… Republik 303 Antje Hausold: …");
+    # insert them where a bare page number closes an entry. When the block
+    # has leaders elsewhere, only the strong "page + next 'Name:'" signal
+    # counts.
+    work = _insert_leaders_at_bare_pages(work, weak=not _PAGE_MARKER.search(work))
 
     pos = 0
     for m in _PAGE_MARKER.finditer(work):
@@ -130,46 +198,37 @@ def parse_toc_text(text: str) -> List[dict]:
 
 
 # ---------------------------------------------------------------------------
-# High-level: split each entry into (author, title)
+# High-level: split each entry into (authors, title)
 # ---------------------------------------------------------------------------
-
-# Author tokens at the start of an entry follow one of these shapes:
-#   "Hartmut Wolff/Walter Wandling, Title"           (comma; older volumes)
-#   "Helmut Böhm: Title"                              (colon; newer volumes)
-#   "Astrid Christl-Sorcan und Nicole Eller: Title"   (colon + German "und")
-#   "Helmut W. Schaller: Title"                       (middle initial)
-#   "Hans v. Aufseß, Title"                           (nobiliary particle)
 #
-# A *name token* is an initial ("W.") or a capitalised, possibly hyphenated
-# word ("Christl-Sorcan"). A *person* is one or more name tokens with an
-# optional nobiliary particle (von/van/de). Multiple authors are joined by
-# "/", "&", "und", or "u.".  The colon form requires the leading author to
-# be >= 2 name tokens so a title with an early colon isn't mistaken for one.
-_NAME = r"(?:[A-ZÄÖÜ]\.|[A-ZÄÖÜ][A-Za-zÄÖÜäöüß\-]+)"
-_VONS = r"(?:v\.|von|van|de|d')"
-_PERSON  = rf"{_NAME}(?:\s+(?:{_VONS}\s+)?{_NAME})*"
-_PERSON2 = rf"{_NAME}(?:\s+(?:{_VONS}\s+)?{_NAME})+"
-_JOIN = r"(?:\s*[/&]\s*|\s+und\s+|\s+u\.\s+)"
-_AUTHORS       = rf"{_PERSON}(?:{_JOIN}{_PERSON})*"
-_AUTHORS_COLON = rf"{_PERSON2}(?:{_JOIN}{_PERSON})*"
+# Author shapes ("Hartmut Wolff/Walter Wandling, Title", "A, B und C: Title",
+# "Katharina Weigand, Jörg Zedler (Hg.), Title", reviews "Book citation
+# (Reviewer)") are handled by :mod:`pjb_pipeline.structure.names`.
 
-_COMMA_RE = re.compile(rf"^(?P<author>{_AUTHORS})\s*,\s+(?P<title>.+)$", re.DOTALL)
-_COLON_RE = re.compile(rf"^(?P<author>{_AUTHORS_COLON})\s*:\s+(?P<title>.+)$", re.DOTALL)
-_AUTHOR_RE = _COMMA_RE  # back-compat alias
+# Section labels whose entries are book reviews.
+REVIEW_SECTIONS = {"buchbesprechungen", "rezensionen", "besprechungen",
+                   "buchbesprechung", "rezension"}
+
+
+def is_review_section(label: str) -> bool:
+    return (label or "").strip().lower() in REVIEW_SECTIONS
+
+
+def format_authors(names: List[str]) -> str:
+    """Display string for a list of persons, as the journal writes it."""
+    return " / ".join(n for n in names if n)
 
 
 def split_author_title(entry_text: str):
-    """Split a TOC entry into (author, title). Handles both the comma form
-    used by older volumes and the colon form used by newer ones. Falls back
-    to ("", entry_text) when neither matches."""
+    """Split a TOC entry into (author, title). Back-compat wrapper around
+    :func:`pjb_pipeline.structure.names.split_entry`; the author string
+    joins several persons with " / ". Falls back to ("", entry_text)."""
     if not entry_text:
         return "", ""
-    text = re.sub(r"\s+", " ", entry_text).strip()
-    for rx in (_COMMA_RE, _COLON_RE):
-        m = rx.match(text)
-        if m:
-            return m.group("author").strip(" ,.;"), m.group("title").strip()
-    return "", text
+    p = split_entry(entry_text)
+    if p.is_review:
+        return format_authors(p.authors), p.title
+    return format_authors(p.authors), p.title
 
 
 def _parse_page(p: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
@@ -190,26 +249,31 @@ def _parse_page(p: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
 
 
 def parse_toc_structure(
-    text: str,
+    text: str = "",
     *,
     known_sections: Iterable[str] = (),
+    tokens: Optional[List[dict]] = None,
+    given_names: Optional[Set[str]] = None,
+    resolver: Optional[NameResolver] = None,
 ) -> TocStructure:
-    """Parse a raw TOC blob into a structured object.
+    """Parse a raw TOC blob (or a pre-built token stream) into a structured
+    object.
 
     ``known_sections`` is an optional list of expected uppercase section
     labels (``("AUFSÄTZE", "BERICHTE")`` etc.). The parser uses it to
     normalise capitalisation oddities like ``AUFSATZE`` (missing umlaut)
     or ``A U F S Ä T Z E`` (letter-spaced).
-    """
-    raw_tokens = parse_toc_text(text)
 
-    # Build a fast lookup of "label without diacritics & whitespace" →
-    # canonical label.
-    def canon(s: str) -> str:
-        s = re.sub(r"\s+", "", s).upper()
-        s = s.replace("Ä", "A").replace("Ö", "O").replace("Ü", "U").replace("ß", "S")
-        return s
-    known_lookup = {canon(s): s.title() for s in known_sections}
+    ``tokens`` (from :func:`collect_toc_tokens`) replaces ``text`` when the
+    TOC spans several blocks and pages. ``given_names`` extends the given-name
+    lexicon, ``resolver`` maps surname-only reviewers ("(Heydenreuter)") to
+    the full names of the volume's contributor list.
+    """
+    raw_tokens = tokens if tokens is not None else parse_toc_text(text)
+    given = set(base_given_names()) | set(given_names or ())
+    known_keys = resolver.keys() if resolver else None
+
+    known_lookup = {_canon_label(s): s.title() for s in known_sections}
 
     structure = TocStructure()
     current_section = ""
@@ -225,24 +289,207 @@ def parse_toc_structure(
             structure.title = tok["text"]
         elif tok["kind"] == "header":
             flush_section()
-            label = tok["text"].strip()
-            current_section = known_lookup.get(canon(label), label.title())
+            current_section = section_label(tok["text"], known_lookup)
+        elif tok["kind"] == "skip" or _FRONTMATTER_LIST.match(tok["text"].strip()):
+            continue
         else:  # entry
-            author, title = split_author_title(tok["text"])
+            parsed = split_entry(tok["text"], given, known=known_keys,
+                                 review_context=is_review_section(current_section))
+            authors = list(parsed.authors)
+            if resolver is not None:
+                authors = [resolver.resolve(a) for a in authors]
+                # Outside a review section a surname-only "reviewer" that is
+                # not among the volume's contributors is no reviewer — the
+                # parenthetical is something else ("(NDB)", a place name).
+                if (parsed.is_review and known_keys
+                        and not is_review_section(current_section)
+                        and any(len(a.split()) == 1 for a in authors)):
+                    parsed = split_entry(tok["text"], given, known=known_keys,
+                                         allow_review=False)
+                    authors = [resolver.resolve(a) for a in parsed.authors]
             page, page_end = _parse_page(tok.get("page"))
+            section = current_section
+            if tok.get("secondary") or _BIBLIOGRAPHY_TITLE.search(parsed.title):
+                section = "Bibliographie"
+            elif _REGISTER_TITLE.search(parsed.title):
+                section = "Register"
             entry = TocEntry(
                 raw_text=tok["text"],
-                title=title,
-                author=author,
+                title=parsed.title,
+                author=format_authors(authors),
                 page=page,
                 page_end=page_end,
-                section=current_section,
+                section=section,
+                authors=authors,
+                editors=list(parsed.editors),
+                is_review=parsed.is_review,
+                reviewed_title=parsed.reviewed_title,
+                reviewed_authors=list(parsed.reviewed_authors),
+                reviewed_editors=list(parsed.reviewed_editors),
             )
             structure.entries.append(entry)
             current_section_entries.append(entry)
 
     flush_section()
     return structure
+
+
+def _canon_label(s: str) -> str:
+    s = re.sub(r"\s+", "", s).upper()
+    return s.replace("Ä", "A").replace("Ö", "O").replace("Ü", "U").replace("ß", "S")
+
+
+def section_label(text: str, known_lookup: Dict[str, str]) -> str:
+    """Canonical display label for a section heading."""
+    label = re.sub(r"\s+", " ", text).strip()
+    if _canon_label(label) in known_lookup:
+        return known_lookup[_canon_label(label)]
+    letters = [c for c in label if c.isalpha()]
+    if letters and all(c.isupper() for c in letters):
+        return label.title()
+    return label
+
+
+# TOC lines that are front-matter lists, not articles.
+_FRONTMATTER_LIST = re.compile(
+    r"^(?:verzeichnis\s+der\s+(?:mitarbeiter|abbildungen|tafeln)|mitarbeiter(?:innen)?"
+    r"|inhalt|inhaltsverzeichnis)\s*$", re.I)
+# The annual regional bibliography and the registers close every volume;
+# they are no part of the review section that precedes them in the TOC.
+_BIBLIOGRAPHY_TITLE = re.compile(r"^Neuerscheinungen zur Geschichte", re.I)
+_REGISTER_TITLE = re.compile(r"register\s*$", re.I)
+
+# Headings that open a list on a TOC page which is *not* part of the
+# article inventory (list of figures/plates).
+_NON_ARTICLE_LISTS = re.compile(r"verzeichnis\s+der\s+(?:abbildungen|tafeln)", re.I)
+_TOC_TITLE = re.compile(r"^\s*(?:inhalt|inhaltsverzeichnis)\s*$", re.I)
+
+
+def _is_section_heading(text: str, known_lookup: Dict[str, str]) -> bool:
+    """A section heading on a TOC page is an all-caps label (AUFSÄTZE,
+    BUCHBESPRECHUNGEN) or a known label; mixed-case sub-headings
+    ("Rezensionen", "Beiträge der Tagung …") are not sections."""
+    t = re.sub(r"\s+", " ", text or "").strip()
+    if not t or len(t) > 40:
+        return False
+    if _canon_label(t) in known_lookup:
+        return True
+    letters = [c for c in t if c.isalpha()]
+    return len(letters) >= 4 and all(c.isupper() for c in letters)
+
+
+def _is_blank_page(page: dict) -> bool:
+    return not any((b.get("text") or "").strip() for b in page["blocks"]
+                   if b["type"] not in ("image", "figure", "diagram",
+                                        "page-header", "page-footer"))
+
+
+def collect_toc_tokens(
+    unified_pages: list,
+    known_sections: Iterable[str] = (),
+) -> List[dict]:
+    """Build the TOC token stream from every block on the TOC pages.
+
+    Chandra often puts the section headings of a TOC page ("BUCHBESPRECHUNGEN")
+    into separate ``section-header`` blocks *outside* the ``table-of-contents``
+    block, so reading only the TOC blocks loses them and the reviews end up
+    filed under the previous section. Here the TOC pages are walked in
+    reading order: section headings become ``header`` tokens, TOC blocks are
+    tokenised with :func:`parse_toc_text`, and entries under a "Verzeichnis
+    der Abbildungen" heading (a list of plates, not articles) are skipped.
+
+    Only the *main* TOC run (the contiguous pages starting at the first TOC
+    page) contributes headings; later TOC blocks (e.g. the bibliography's
+    own "Inhaltsübersicht") only contribute entries, as before.
+    """
+    known_lookup = {_canon_label(s): s.title() for s in known_sections}
+    toc_pages = [p for p in unified_pages
+                 if any(b["type"] == "table-of-contents" for b in p["blocks"])]
+    if not toc_pages:
+        return []
+    # The main TOC run: contiguous TOC pages, allowing blank pages between
+    # them (vol. 52 has a blank verso between INHALT and its continuation).
+    by_pn = {p["page_num"]: p for p in unified_pages}
+    toc_pns = {p["page_num"] for p in toc_pages}
+    main_run = {toc_pages[0]["page_num"]}
+    pn = toc_pages[0]["page_num"] + 1
+    while pn in by_pn and (pn in toc_pns or _is_blank_page(by_pn[pn])):
+        if pn in toc_pns:
+            main_run.add(pn)
+        pn += 1
+
+    tokens: List[dict] = []
+    for p in toc_pages:
+        in_main = p["page_num"] in main_run
+        skipping = False
+        for b in p["blocks"]:
+            text = (b.get("text") or "").strip()
+            if b["type"] == "section-header" and in_main:
+                if _TOC_TITLE.match(text):
+                    if not any(t["kind"] == "title" for t in tokens):
+                        tokens.append({"kind": "title", "text": text, "page": None})
+                    continue
+                if _NON_ARTICLE_LISTS.search(text):
+                    skipping = True
+                    continue
+                if _is_section_heading(text, known_lookup):
+                    skipping = False
+                    tokens.append({"kind": "header", "text": text, "page": None})
+                continue
+            if b["type"] != "table-of-contents" or not text:
+                continue
+            for tok in parse_toc_text(text):
+                if tok["kind"] == "header" and _NON_ARTICLE_LISTS.search(tok["text"]):
+                    skipping = True
+                    continue
+                if tok["kind"] == "header":
+                    skipping = False
+                    if not in_main:
+                        continue
+                if tok["kind"] == "title" and (not in_main or
+                                               any(t["kind"] == "title" for t in tokens)):
+                    continue
+                if skipping and tok["kind"] == "entry":
+                    tok = {**tok, "kind": "skip"}
+                elif not in_main and tok["kind"] == "entry":
+                    tok = {**tok, "secondary": True}
+                tokens.append(tok)
+    return tokens
+
+
+# ---------------------------------------------------------------------------
+# Contributor list ("MITARBEITER" / "Verzeichnis der Mitarbeiter")
+# ---------------------------------------------------------------------------
+
+_CONTRIB_HEADING = re.compile(r"mitarbeiter|autorinnen|autoren\s+(?:dieses|des)", re.I)
+
+
+def find_contributors(unified_pages: list) -> NameResolver:
+    """Collect the volume's contributor list into a :class:`NameResolver`.
+
+    The list ("Becker, Winfried, Prof. em. Dr. phil., …") sits on a page
+    headed "MITARBEITER" in the front matter. Its full names let the parser
+    resolve surname-only reviewers of older volumes ("(Heydenreuter)" →
+    "Reinhard Heydenreuter") and validate author names.
+    """
+    given = set(base_given_names())
+    resolver = NameResolver()
+    for p in unified_pages:
+        heads = [b for b in p["blocks"] if b["type"] in ("section-header", "text")
+                 and _CONTRIB_HEADING.search(b.get("text") or "")
+                 and len(b.get("text") or "") < 60]
+        if not heads:
+            continue
+        if any(b["type"] == "table-of-contents" for b in p["blocks"]):
+            continue
+        y0 = min(h["bbox"][1] for h in heads)
+        paras: List[str] = []
+        for b in p["blocks"]:
+            if b["type"] in ("list", "text", "table") and b["bbox"][1] >= y0 - 5:
+                paras.extend(paragraphs_from_block(b))
+        for c in parse_contributor_entries(paras, given):
+            resolver.add(c.name)
+    return resolver
 
 
 def find_toc_blocks(unified_pages: list) -> List[dict]:

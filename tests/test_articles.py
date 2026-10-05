@@ -70,8 +70,8 @@ class TestTocDriven:
         toc_text = (
             "INHALT\n"
             "AUFSÄTZE"
-            "Smith, First Article ...... 9"
-            "Jones, Second Article ...... 43"
+            "Hans Smith, First Article ...... 9"
+            "Peter Jones, Second Article ...... 43"
         )
         pages = [
             _page(1, [_block("p1_b001", "table-of-contents",
@@ -89,7 +89,7 @@ class TestTocDriven:
         assert len(real) == 2
         assert real[0]["title"] == "First Article"
         assert real[0]["page_first"] == 9
-        assert real[0]["author"] == "Smith"
+        assert real[0]["author"] == "Hans Smith"
         # Second article inherits its section from the TOC
         assert real[1]["section"] in ("Aufsätze", "AUFSÄTZE")
 

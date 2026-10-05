@@ -1,12 +1,14 @@
 """Pipeline orchestration.
 
-Runs every stage from PDF to bundled output, recording timings and writing
-all artefacts to ``cfg.out_dir``.
+Runs every stage from the scanned source (a book PDF or a folder of page
+images) to bundled output, recording timings and writing all artefacts to
+``cfg.out_dir``. Re-running a volume reuses rendered pages and cached OCR.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -27,6 +29,25 @@ from .structure.footnotes import link_article_footnotes
 DEFAULT_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
 
+def bundle_output(cfg: VolumeConfig) -> Path:
+    """Zip the volume's output directory to ``<output_root>/<slug>.zip``.
+
+    Symlinked sub-directories are followed (``pages/`` may live on another
+    disk), so the bundle always carries the page scans that the TEI
+    facsimile, PageXML and graph ``facsimile`` links point to.
+    """
+    bundle_path = Path(cfg.output_root) / f"{cfg.slug}.zip"
+    if bundle_path.exists():
+        bundle_path.unlink()
+    with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for root, dirs, files in os.walk(cfg.out_dir, followlinks=True):
+            dirs.sort()
+            for name in sorted(files):
+                p = Path(root) / name
+                zf.write(p, p.relative_to(cfg.out_dir.parent))
+    return bundle_path
+
+
 def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
     """Run the whole pipeline for one volume. Returns the timings dict."""
     cfg.ensure_dirs()
@@ -34,7 +55,7 @@ def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
 
     timings: dict = {}
 
-    with stage("Render PDF → page images", timings):
+    with stage("Prepare page images (PDF or image folder)", timings):
         pages = render.run(cfg)
 
     with stage("OCR + layout (Chandra)", timings):
@@ -60,8 +81,17 @@ def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
             if a["title"] == "Frontmatter":
                 continue
             sec = a.get("section") or "?"
-            print(f"   • {a['num']:>2}. p.{a['page_first']:>3}–{a['page_last']:<3} "
-                  f"[{sec:<14s}]  {a['title'][:60]}")
+            flag = " " if a.get("start_matched", True) else "?"
+            who = " / ".join(a.get("authors") or []) or "—"
+            if a.get("review"):
+                who = f"rev. {who}"
+            print(f"   •{flag}{a['num']:>2}. p.{a['page_first']:>3}–{a['page_last']:<3} "
+                  f"[{sec:<14s}] {who[:32]:<32s} {a['title'][:50]}")
+        n_real = sum(1 for a in articles if a["title"] != "Frontmatter")
+        n_matched = sum(1 for a in articles if a.get("start_matched"))
+        if any("start_matched" in a for a in articles):
+            print(f"   article starts located at block level: {n_matched}/{n_real} "
+                  f"(? = title not found on its page; article starts at the page top)")
 
     with stage("Link footnote references", timings):
         footnotes_by_article: dict = {}
@@ -116,13 +146,7 @@ def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
         )
 
     with stage("Bundle output", timings):
-        bundle_path = Path(cfg.output_root) / f"{cfg.slug}.zip"
-        if bundle_path.exists():
-            bundle_path.unlink()
-        with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for p in cfg.out_dir.rglob("*"):
-                if p.is_file():
-                    zf.write(p, p.relative_to(cfg.out_dir.parent))
+        bundle_path = bundle_output(cfg)
         size_mb = bundle_path.stat().st_size / 1e6
         print(f"   wrote {bundle_path}  ({size_mb:.1f} MB)")
 

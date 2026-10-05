@@ -1,8 +1,9 @@
 # Passauer Jahrbücher · Pipeline
 
-A modular pipeline that ingests one scanned PDF volume of *Passauer Jahrbücher*
-(*Ostbairische Grenzmarken*), runs **Chandra 2** layout-aware OCR, reconstructs
-page and article structure, and emits five artefacts:
+A modular pipeline that ingests one scanned volume of *Passauer Jahrbücher*
+(*Ostbairische Grenzmarken*) — either the whole book as one PDF or a folder of
+individually scanned page images — runs **Chandra 2** layout-aware OCR,
+reconstructs page and article structure, and emits five artefacts:
 
 | Artefact   | Format        | Purpose                                                 |
 | ---------- | ------------- | ------------------------------------------------------- |
@@ -33,7 +34,7 @@ pip install -e ".[vllm]"        # for the vLLM-server path (smaller install)
 
 ## Run a single volume
 
-Edit `configs/pjb-048-2006.yaml` (paths, page range, OCR backend), then:
+Edit `configs/pjb-048-2006.yaml` (source, page range, OCR backend), then:
 
 ```bash
 pjb-pipeline run configs/pjb-048-2006.yaml
@@ -55,7 +56,30 @@ pjb-pipeline run configs/pjb-048-2006.yaml --output-root ~/pjb-out
 
 When OCR completes, the per-page interim JSON is cached, so re-running the
 pipeline with the same config will skip inference and only re-run the
-downstream stages. Handy when you're iterating on the HTML or TEI emitters.
+downstream stages — the OCR server is not even contacted when every page is
+cached, and pages already rendered from the same source are reused. Handy
+when you're iterating on the structure detection or the emitters.
+
+### Source: book PDF or page images
+
+`source_path` (the older key `pdf_path` still works) points at one of
+
+* **a book PDF** — rendered at `render_dpi` (200 by default);
+* **a folder of page images** — JPEG, PNG, TIFF (multi-page TIFFs give one
+  page per frame), WebP or BMP. The natural sort order of the file names is
+  the page order (`page_2.jpg` before `page_10.jpg`). Images are rotated
+  according to their EXIF orientation and scaled so that the longer side is at
+  most `image_max_side` pixels (default 2200, the size of a 200 dpi render;
+  `null` keeps full resolution);
+* **a scanner output folder** — the pipeline looks inside it for the page
+  images or the single PDF (e.g. `…_finished/pdf/…pdf` or `…_finished/jpg/`).
+
+```yaml
+source_path: "/home/tobias/2026-11-02_10-00_LXVII_2025_finished"   # folder or PDF
+image_max_side: 2200
+```
+
+`pjb-pipeline run config.yaml --source /path/to/scans` overrides it.
 
 ---
 
@@ -118,19 +142,78 @@ either side.
 
 ---
 
+## How structure is recovered
+
+**Layout analysis** (`structure/layout.py`, run inside the normalise stage):
+
+* *Print size* — character density per block (≈ 1 / font-size²) separates
+  body text from footnote-size text in every volume. The two clusters are
+  calibrated per volume. Small-print "text" blocks at the foot of a column that
+  carry footnote evidence (a leading note number, an adjacent footnote, citation
+  vocabulary like "wie Anm.", "Vgl.") become footnotes; whole pages of notes
+  (endnotes) and footnotes running over a page are recognised too, while
+  bibliography and register pages are left alone. "Abb. 3: …" text next to a
+  figure becomes a caption.
+* *Reading order* — several candidate orders are built (recursive XY-cut with
+  columns first, XY-cut with rows first, the earlier column-band heuristic,
+  Chandra's own order) and scored by text continuity (a block ending in
+  "verlie-" must be followed by "henen…"; a lower-case block cannot follow a
+  finished sentence), geometric plausibility and agreement with Chandra. The
+  previous page's last block takes part, so the join across the page break
+  counts as well. Footnotes are ordered after the body.
+
+**Articles at block level** (`structure/articles.py`): every TOC entry is
+located on its start page — title heading, author byline above or below it, or
+for a book review its citation line — and pages shared by several articles
+(the end of one and the start of the next, several reviews on one page) are
+split at that block. Footnotes on a shared page go to the article whose text
+cites them. Printed page numbers are mapped to PDF pages with the *local*
+offset from the page-number stamps, so plates inserted in the middle of a
+volume do not shift the articles after them.
+
+**Authors** (`structure/names.py`): TOC entries are split into individual
+persons — "A, B und C: Titel", "A/B, Titel", "A, B (Hg.), Titel",
+"Franziska, Karl und Georg R. Rettenbacher" — with a given-name lexicon
+(`data/first_names.txt`) telling names from capitalised title words. The
+section headings of the TOC page are read even when Chandra puts them outside
+the TOC block, and in book-review sections the *reviewer* (the name in brackets
+after the citation, or before the colon in newer volumes) is the article's
+author, while the reviewed book's authors and editors are kept separately
+(`itemReviewed` in the graph). Surname-only reviewers of older volumes
+("(Heydenreuter)") are completed from the volume's contributor list
+("MITARBEITER"). The byline on the article's first page confirms and completes
+the author list.
+
+Check a processed volume with
+
+```bash
+python3 scripts/check_reading_order.py output/pjb-056-2014
+```
+
+It reports the calibrated print sizes, re-labelled blocks, pages whose order
+differs from Chandra's, and the two error signals that matter: broken
+hyphenation joins and stranded continuations (a handful per volume is normal —
+compound words like "Böhmerwald-Liedes", poems, OCR omissions).
+
+---
+
 ## Codebase layout
 
 ```
 pjb_pipeline/
 ├── config.py            ← VolumeConfig + YAML loader
 ├── stage.py             ← timing context manager
-├── render.py            ← Stage 1: PDF → page PNGs
+├── render.py            ← Stage 1: book PDF or page-image folder → page PNGs
 ├── ocr.py               ← Stage 2: Chandra (HF or vLLM)
-├── normalize.py         ← Stage 3: canonical block model
+├── normalize.py         ← Stage 3: canonical block model + layout analysis
 ├── structure/
-│   ├── toc.py           ← parse TOC into (section, author, title, page)
-│   ├── articles.py      ← TOC-driven boundary detection + heuristic fallback
+│   ├── layout.py        ← print-size roles (footnotes!), reading order
+│   ├── columns.py       ← column bands (HTML facsimile layout, order candidate)
+│   ├── toc.py           ← parse TOC into (section, authors, title, page)
+│   ├── names.py         ← author/reviewer/editor parsing, bylines, contributors
+│   ├── articles.py      ← TOC-driven, block-level article boundaries
 │   └── footnotes.py     ← detect refs in body, link to notes
+├── data/first_names.txt ← given-name lexicon for author detection
 ├── emit/
 │   ├── jsonld_context.py← shared JSON-LD @context (graph + wiki share this)
 │   ├── pagexml.py       ← Stage 5: PRImA PageXML
@@ -144,7 +227,7 @@ pjb_pipeline/
 ├── wiki_assembler.py    ← init-wiki / add-volume (corpus-wide wiki ops)
 ├── wiki_templates/      ← CLAUDE.md, README.md for the wiki repo
 ├── pipeline.py          ← top-level orchestrator
-└── cli.py               ← `pjb-pipeline run | merge-graphs | init-wiki | add-volume`
+└── cli.py               ← `pjb-pipeline run | merge-graphs | init-wiki | add-volume | rebuild-wiki`
 
 assets/                  ← canonical CSS + JS, copied into every output bundle
 configs/                 ← one YAML per volume
@@ -168,10 +251,10 @@ schema (in JSON-LD, schema.org-flavoured):
 | `PublicationSeries` | `pjb:series/passauer-jahrbuecher`                     | Same in every volume — merges trivially                     |
 | `PublicationVolume` | `pjb:vol/pjb-048-2006`                                | One per volume                                              |
 | `CreativeWorkSeason`| `pjb:vol/<slug>/section/<section-slug>`               | One per TOC section (Aufsätze, Berichte, …)                 |
-| `ScholarlyArticle`  | `pjb:art/<slug>-art<NN>`                              | One per detected article; carries `hasPart` → its pages     |
+| `ScholarlyArticle`  | `pjb:art/<slug>-art<NN>`                              | One per detected article; carries `hasPart` → its pages; a book review is also a `Review` whose `itemReviewed` names the book and its authors/editors |
 | `WebPage`           | `pjb:vol/<slug>/page/<NNNN>`                          | One per processed page; `inArticle` (or `inVolume` for frontmatter); `hasPart` → its figures |
 | `ImageObject`       | `pjb:vol/<slug>/page/<NNNN>/figure/<block-id>`        | One per figure/image/diagram region; `inPage` → its page; `contentUrl` → `regions/<block-id>.png` |
-| `Person`            | `pjb:person/<slugified-name>`                         | **Stable across volumes**: same author → same IRI           |
+| `Person`            | `pjb:person/<slugified-name>`                         | **Stable across volumes**: same author → same IRI. One node per person, also for co-authors, editors and reviewed authors |
 | `Comment`           | `pjb:art/<art-id>/fn/<n>`                             | Footnotes; `footnoteOf` → article, `inPage` → page          |
 
 So the graph forms the chain **Series → Volume → Article → Page → {Figure, Footnote}** with bidirectional links (`hasPart` / `isPartOf`-style predicates) at each level.
@@ -227,7 +310,14 @@ git add . && git commit -m "Add vol. XLIX (2007)"
 ```
 
 `add-volume` is **idempotent** — re-running with the same volume produces
-a no-op diff. It also **preserves agent-authored content** across re-runs:
+a no-op diff. Re-adding a *re-processed* volume replaces that volume's pages
+and graph nodes: article pages and person entries it no longer produces are
+removed. After a pipeline change that affects every volume, regenerate the
+whole wiki in one go:
+
+```bash
+pjb-pipeline rebuild-wiki ../Passauer_Jahrbuecher_Wiki output/pjb-*/
+``` It also **preserves agent-authored content** across re-runs:
 `## Summary`, `## Mentions`, and `## Notes` sections you (or an LLM) wrote
 on previous visits stay put; only the structural parts of pages
 (frontmatter, `## Full Text`, `## Footnotes`, `## Appears in`) are

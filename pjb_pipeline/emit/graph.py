@@ -61,6 +61,7 @@ def _slug(s: str) -> str:
     """URL-safe slug. NFD-decompose, drop diacritics, lower, collapse hyphens."""
     if not s:
         return ""
+    s = s.replace("ß", "ss").replace("ẞ", "SS")   # NFKD would drop it ("Mittelstra")
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.lower()
@@ -146,6 +147,30 @@ def _split_authors(combined: str) -> List[str]:
         for p in re.split(r"\s*[/&]\s*|\s+und\s+|\s+and\s+", (combined or "").strip())
         if p.strip(" ,.;")
     ]
+
+
+def article_authors(art: dict) -> List[str]:
+    """The article's authors as individual names.
+
+    Uses the parsed ``authors`` list (see :mod:`pjb_pipeline.structure.names`)
+    and falls back to splitting the display string for articles built by
+    the heuristic path. For a book review these are the *reviewers*.
+    """
+    if art.get("authors") is not None:
+        return [a for a in art["authors"] if a]
+    return _split_authors(art.get("author", ""))
+
+
+def article_people(art: dict) -> List[tuple]:
+    """``(name, role)`` for everyone attached to an article: ``author``,
+    ``editor`` (of an edited article), ``reviewed-author`` /
+    ``reviewed-editor`` (of the book a review discusses)."""
+    out = [(n, "author") for n in article_authors(art)]
+    out += [(n, "editor") for n in art.get("editors") or [] if n not in article_authors(art)]
+    rev = art.get("review") or {}
+    out += [(n, "reviewed-author") for n in rev.get("authors") or []]
+    out += [(n, "reviewed-editor") for n in rev.get("editors") or []]
+    return out
 
 
 def build_volume_graph(
@@ -296,8 +321,8 @@ def build_volume_graph(
     for art in articles:
         if art["title"] == "Frontmatter":
             continue
-        author_list = _split_authors(art.get("author", ""))
-        all_authors.extend(author_list)
+        author_list = article_authors(art)
+        all_authors.extend(n for n, _role in article_people(art))
 
         # Refs (outbound from this article to footnotes)
         article_refs = (refs_by_article or {}).get(art["id"], [])
@@ -316,6 +341,19 @@ def build_volume_graph(
             node["inSection"] = sections_in_volume.get(art["section"])
         if author_list:
             node["author"] = [{"@id": person_iri(a)} for a in author_list]
+        if art.get("editors"):
+            node["editor"] = [{"@id": person_iri(a)} for a in art["editors"]]
+        rev = art.get("review")
+        if rev:
+            # A book review: the article is a schema:Review whose author is
+            # the reviewer; the reviewed book carries its own authors/editors.
+            node["@type"] = ["ScholarlyArticle", "Review"]
+            book: dict = {"@type": "Book", "name": rev.get("title") or art["title"]}
+            if rev.get("authors"):
+                book["author"] = [{"@id": person_iri(a)} for a in rev["authors"]]
+            if rev.get("editors"):
+                book["editor"] = [{"@id": person_iri(a)} for a in rev["editors"]]
+            node["itemReviewed"] = book
         # Attach the article's pages explicitly. ``hasPart`` is the inverse
         # of the per-page ``inArticle`` link above, so a graph visualiser
         # (or a SPARQL query) can hop in either direction and the pages

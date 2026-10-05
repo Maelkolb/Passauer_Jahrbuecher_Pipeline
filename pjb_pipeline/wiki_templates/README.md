@@ -3,7 +3,8 @@
 An LLM-maintained companion wiki to the digital edition of the
 *Passauer Jahrbücher* (*Ostbairische Grenzmarken*), built incrementally
 as the [Passauer_Jahrbuecher_Pipeline](https://github.com/Maelkolb/Passauer_Jahrbuecher_Pipeline)
-processes each of the 55 volumes through Chandra OCR.
+processes each of the 55 volumes (scanned books or page images) through
+Chandra OCR.
 
 ## What's in here
 
@@ -24,7 +25,9 @@ pjb-pipeline add-volume <this-wiki-root> output/pjb-049-2007/
 ```
 
 Each `add-volume` is idempotent: re-running with the same volume produces a
-clean no-op diff. LLM-authored content (`## Summary`, `## Mentions`,
+clean no-op diff. After a pipeline update that changes every volume, the
+whole wiki is regenerated with
+`pjb-pipeline rebuild-wiki <this-wiki-root> output/pjb-*/`. LLM-authored content (`## Summary`, `## Mentions`,
 `## Notes` sections, plus any agent-added frontmatter fields) is preserved
 across re-runs; the pipeline only regenerates the structural parts.
 
