@@ -362,7 +362,8 @@ def _continues(prev_md: str, next_md: str) -> Optional[str]:
         return "hyphen-keep" if f else None
     if _SENTENCE_END.search(a):
         return None
-    last = a[-1]
+    core = a.rstrip("\"'“”»«’)]")      # "… und Pasterwiz'" / "… „Zitat“"
+    last = core[-1] if core else ""
     if last.isalnum() or last in ",;–—-(":
         return "space"
     return None
