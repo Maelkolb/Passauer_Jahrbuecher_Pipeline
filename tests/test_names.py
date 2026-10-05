@@ -149,3 +149,10 @@ class TestBylineAndContributors:
         ]
         names = [c.name for c in parse_contributor_entries(paras, GIVEN)]
         assert names == ["Winfried Becker", "Markus T. Huber", "Marc von Knorring"]
+
+
+def test_name_cleanup():
+    from pjb_pipeline.structure.names import clean_name
+    assert clean_name("Marc Von Knorring") == "Marc von Knorring"
+    assert clean_name("Frau Nicole Eller") == "Nicole Eller"
+    assert clean_name("Prof. Dr. Egon Boshof") == "Egon Boshof"

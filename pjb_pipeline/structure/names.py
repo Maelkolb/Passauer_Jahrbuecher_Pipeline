@@ -174,12 +174,19 @@ def _tokens(s: str) -> List[str]:
 
 
 def clean_name(s: str) -> str:
-    """Drop honorifics, role markers, "†" and stray punctuation around a name."""
+    """Drop honorifics, role markers, "†" and stray punctuation around a
+    name; nobiliary particles inside a name are lower-cased ("Marc Von
+    Knorring" → "Marc von Knorring")."""
     s = _ROLE_RE.sub(" ", s or "")
     s = _HONORIFIC_RE.sub("", s)
+    s = re.sub(r"^(?:Frau|Herr|Fr\.|Hr\.)\s+", "", s.strip())
     s = s.replace("†", " ")
-    s = re.sub(r"\s+", " ", s)
-    return s.strip(" ,.;:")
+    s = re.sub(r"\s+", " ", s).strip(" ,.;:")
+    toks = s.split(" ")
+    for k in range(1, len(toks) - 1):
+        if toks[k].lower() in ("von", "zu", "van", "de", "der", "den", "und"):
+            toks[k] = toks[k].lower()
+    return " ".join(toks)
 
 
 def looks_like_person(
@@ -625,7 +632,7 @@ def parse_contributor_entries(paragraphs: Iterable[str], given_lex: Set[str]) ->
         first_given = given.split()[0]
         if not (_is_given(first_given, given_lex) or len(given.split()) <= 3):
             continue
-        name = f"{given} {particle + ' ' if particle else ''}{surname}"
+        name = clean_name(f"{given} {particle + ' ' if particle else ''}{surname}")
         key = name_key(name)
         if key in seen:
             continue
