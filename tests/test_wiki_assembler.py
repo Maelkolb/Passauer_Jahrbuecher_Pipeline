@@ -282,7 +282,7 @@ def test_add_volume_preserves_agent_summary_across_reruns(tmp_path):
     final = art_path.read_text(encoding="utf-8")
     assert "A careful analysis of an obscure topic." in final
     # Structural body still present (was regenerated)
-    assert "### Page 1" in final
+    assert '<a id="page-1"></a>*[p. 1]*' in final
     assert "Body." in final
 
 
@@ -318,3 +318,44 @@ def test_add_volume_is_idempotent_on_same_volume(tmp_path):
     # Log: not double-entered
     log = (wiki_root / "log.md").read_text(encoding="utf-8")
     assert log.count("## [") - log.count("[YYYY") <= 3  # init + 1 add-volume
+
+
+def test_readding_a_volume_replaces_its_pages_and_nodes(tmp_path):
+    from pjb_pipeline.wiki_assembler import rebuild_wiki
+    wiki_root = tmp_path / "wiki"
+    init_wiki(wiki_root)
+    out = tmp_path / "out1"
+    wrong = _article("pjb-048-2006-art01", 1, "Ein Titel", 1, 1, author="Orts-",
+                     pages=[_page(1, [_block("p1_b001", "text", "Body.")])])
+    extra = _article("pjb-048-2006-art02", 2, "Weg damit", 2, 2, author="Hans Huber",
+                     pages=[_page(2, [_block("p2_b001", "text", "Body.")])])
+    cfg = _process_volume_into_output(out, volume_number=48, year=2006,
+                                      slug="pjb-048-2006", articles=[wrong, extra])
+    add_volume(wiki_root, cfg.out_dir)
+    assert (wiki_root / "people" / "orts.md").exists()
+    assert (wiki_root / "articles" / "pjb-048-2006-art02.md").exists()
+
+    # Re-processed volume: the author is fixed and one article is gone.
+    out2 = tmp_path / "out2"
+    fixed = _article("pjb-048-2006-art01", 1, "Ein Titel", 1, 1,
+                     pages=[_page(1, [_block("p1_b001", "text", "Body.")])])
+    fixed["authors"] = ["Paul Praxl"]
+    cfg2 = _process_volume_into_output(out2, volume_number=48, year=2006,
+                                       slug="pjb-048-2006", articles=[fixed])
+    add_volume(wiki_root, cfg2.out_dir)
+    assert not (wiki_root / "people" / "orts.md").exists()
+    assert not (wiki_root / "people" / "hans-huber.md").exists()
+    assert not (wiki_root / "articles" / "pjb-048-2006-art02.md").exists()
+    corpus = json.loads((wiki_root / "_graph" / "corpus.jsonld").read_text(encoding="utf-8"))
+    ids = {n["@id"] for n in corpus["@graph"]}
+    assert "pjb:person/orts" not in ids and "pjb:art/pjb-048-2006-art02" not in ids
+    art = next(n for n in corpus["@graph"] if n["@id"] == "pjb:art/pjb-048-2006-art01")
+    assert art["author"] == [{"@id": "pjb:person/paul-praxl"}]
+
+    # rebuild-wiki keeps agent-written summaries of pages that still exist
+    page = wiki_root / "articles" / "pjb-048-2006-art01.md"
+    page.write_text(page.read_text(encoding="utf-8").replace(
+        "## Summary\n\n*To be added.*", "## Summary\n\nKeep me."), encoding="utf-8")
+    rebuild_wiki(wiki_root, [cfg2.out_dir])
+    assert "Keep me." in page.read_text(encoding="utf-8")
+    assert "rebuild-wiki" in (wiki_root / "log.md").read_text(encoding="utf-8")

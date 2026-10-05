@@ -255,7 +255,7 @@ def test_agent_owned_sections_are_preserved_on_rerun(tmp_path):
     final = art_path.read_text(encoding="utf-8")
     assert "This article discusses something interesting and important." in final
     # And the structural body is still there (was regenerated)
-    assert "### Page 1" in final
+    assert '<a id="page-1"></a>*[p. 1]*' in final
     assert "Body." in final
 
 
@@ -307,42 +307,6 @@ def test_volume_md_has_article_toc_grouped_by_section(tmp_path):
 # ---------------------------------------------------------------------------
 # Hyphenation joining + footnote grouping (regressions for the wiki emit fixes)
 # ---------------------------------------------------------------------------
-
-class TestHyphenationJoining:
-    """Regression for the typographic-hyphen-join fix in ``_render_article_body``.
-
-    When a long German word breaks across a line/column boundary ("verlie-"
-    + "henen Stangenfeldzeichen"), the wiki used to render the two halves
-    as separate paragraphs separated by a blank line, forcing the reader
-    to mentally rejoin them. ``_join_hyphenation`` stitches them back.
-    """
-
-    def test_join_within_page(self):
-        from pjb_pipeline.emit.wiki import _join_hyphenation
-        before = "Die vom Kaiser verlie-\n\nhenen Stangenfeldzeichen und Standarten."
-        after = _join_hyphenation(before)
-        assert "verliehenen Stangenfeldzeichen" in after
-        assert "verlie-" not in after
-
-    def test_does_not_join_across_page_heading(self):
-        # A page heading between the pieces means we're crossing a page
-        # boundary; moving text across that marker is ambiguous so we
-        # leave it for the reader.
-        from pjb_pipeline.emit.wiki import _join_hyphenation
-        before = "Die vom Kaiser verlie-\n\n### Page 19\n\nhenen Stangenfeldzeichen."
-        after = _join_hyphenation(before)
-        assert "### Page 19" in after
-        assert "verlie-" in after  # preserved
-
-    def test_does_not_join_at_uppercase_continuation(self):
-        # Sentence boundary: trailing hyphen but next paragraph starts
-        # with a capital. Not a typographic hyphen → don't join.
-        from pjb_pipeline.emit.wiki import _join_hyphenation
-        before = "Vorder-\n\nSeite des Blattes ist beschriftet."
-        after = _join_hyphenation(before)
-        # Capital S → no join.
-        assert "Vorder-" in after
-
 
 class TestFootnoteGroupingByPage:
     """Regression for the page-grouped footnotes fix.
@@ -466,3 +430,100 @@ class TestFigureRendersChandraAltDescription:
         blk = {"id": "p1_b1", "type": "image", "text": "", "html": ""}
         out = _figure_md(blk, "Image")
         assert "[Image · p1_b1]" in out
+
+
+# ---------------------------------------------------------------------------
+# Continuous body text (paragraph stitching, page markers, floats)
+# ---------------------------------------------------------------------------
+
+class TestContinuousBody:
+    def _render(self, pages, notes=()):
+        art = _article("pjb-048-2006-art01", 1, "T", pages[0]["page_num"],
+                       pages[-1]["page_num"], pages=pages)
+        return wiki._render_article_body(art, list(notes))
+
+    def test_hyphen_join_across_a_page_break(self):
+        out = self._render([
+            _page(18, [_block("a", "text", "Ein Satz über die vom Kaiser verlie-")]),
+            _page(19, [_block("b", "text", "henen Stangenfeldzeichen der Legion.")]),
+        ])
+        assert 'verliehenen <a id="page-19"></a>*[p. 19]* Stangenfeldzeichen' in out
+        assert out.count("\n\n") >= 1
+        assert "verlie-" not in out
+
+    def test_compound_hyphen_is_kept(self):
+        out = self._render([_page(5, [
+            _block("a", "text", "Zum hundertsten Geburtstag des Böhmerwald-"),
+            _block("b", "text", "Liedes wurde ein Fest gefeiert."),
+        ])])
+        assert "Böhmerwald-Liedes" in out
+
+    def test_mid_sentence_join_and_new_paragraph(self):
+        out = self._render([_page(5, [
+            _block("a", "text", "Die Bürger der Stadt versammelten sich im Rathaus und"),
+            _block("b", "text", "beschlossen eine neue Ordnung."),
+            _block("c", "text", "Ein neuer Absatz beginnt hier mit einem ganzen Satz."),
+        ])])
+        assert "Rathaus und beschlossen" in out
+        assert "Ordnung.\n\nEin neuer Absatz" in out
+
+    def test_figure_inside_a_sentence_follows_the_paragraph(self):
+        out = self._render([_page(5, [
+            _block("a", "text", "Der Turm wurde im Jahr 1407 von dem Baumeister"),
+            _block("f", "image", ""),
+            _block("c", "caption", "Abb. 1: Der Turm."),
+            _block("b", "text", "Hans Krumenauer errichtet."),
+        ])])
+        assert out.index("Baumeister Hans Krumenauer errichtet.") < out.index("[Image")
+        assert out.index("[Image") < out.index("Abb. 1")
+
+    def test_title_and_byline_are_not_repeated(self):
+        art = _article("pjb-048-2006-art01", 1, "Die Geschichte", 5, 5, pages=[_page(5, [
+            _block("by", "text", "HANS HUBER"),
+            _block("ti", "section-header", "Die Geschichte"),
+            _block("tx", "text", "Erster Satz."),
+        ])])
+        art["_skip_block_ids"] = ["by", "ti"]
+        out = wiki._render_article_body(art, [])
+        assert "HANS HUBER" not in out and "#### Die Geschichte" not in out
+        assert "Erster Satz." in out
+
+    def test_superscript_refs_from_html_are_linked(self):
+        blk = _block("a", "text", "Würdigungen 6  und Wirken 7  bleiben")
+        blk["html"] = "<p>Würdigungen<sup>6</sup> und Wirken<sup>7</sup> bleiben</p>"
+        notes = [Footnote(article_id="x", block_id="f6", n=6, text="Note six.",
+                          html_id="fn6", page_num=31)]
+        out = self._render([_page(31, [blk])], notes)
+        assert 'Würdigungen<sup><a id="fnref-p031-6" href="#fn-p031-6">6</a></sup> und' in out
+        # no note 7 on the page: plain superscript, no dangling link
+        assert "Wirken<sup>7</sup> bleiben" in out
+
+
+def test_review_page_names_reviewer_and_reviewed_book(tmp_path):
+    cfg = _cfg(tmp_path)
+    art = _article("pjb-048-2006-art05", 5, "Egon Boshof, Die Regesten", 290, 290,
+                   section="Rezensionen", pages=[_page(290, [_block("t", "text", "Text.")])])
+    art["authors"] = ["Andreas Fohrer"]
+    art["review"] = {"title": "Die Regesten", "authors": ["Egon Boshof"], "editors": []}
+    wiki.run(cfg, [art], art["pages"], toc=None)
+    body = _body(cfg.wiki_dir / "articles" / "pjb-048-2006-art05.md")
+    assert "**Andreas Fohrer** · Rezensionen" in body
+    assert "Review of: *Egon Boshof: Die Regesten*" in body
+    fm = _read_frontmatter(cfg.wiki_dir / "articles" / "pjb-048-2006-art05.md")
+    assert fm["@type"] == ["ScholarlyArticle", "Review"]
+    assert fm["author"] == [{"@id": "pjb:person/andreas-fohrer"}]
+    assert fm["itemReviewed"]["author"] == [{"@id": "pjb:person/egon-boshof"}]
+    boshof = (cfg.wiki_dir / "people" / "egon-boshof.md").read_text(encoding="utf-8")
+    assert "reviewed book" in boshof
+
+
+def test_several_authors_get_one_person_page_each(tmp_path):
+    cfg = _cfg(tmp_path)
+    art = _article("pjb-048-2006-art02", 2, "Gemeinsam", 9, 9,
+                   pages=[_page(9, [_block("t", "text", "Text.")])])
+    art["authors"] = ["Sebastian Gassner", "Nina Kunze", "Malte Rehbein"]
+    wiki.run(cfg, [art], art["pages"], toc=None)
+    people = sorted(p.name for p in (cfg.wiki_dir / "people").glob("*.md"))
+    assert people == ["malte-rehbein.md", "nina-kunze.md", "sebastian-gassner.md"]
+    body = _body(cfg.wiki_dir / "articles" / "pjb-048-2006-art02.md")
+    assert "**Sebastian Gassner / Nina Kunze / Malte Rehbein**" in body

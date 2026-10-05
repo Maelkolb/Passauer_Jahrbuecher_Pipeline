@@ -168,7 +168,72 @@ def _write_series_md(wiki_root: Path, series_node: dict) -> None:
 # Add one volume to the wiki (add-volume)
 # ---------------------------------------------------------------------------
 
-def add_volume(wiki_root: Path, volume_output_root: Path) -> None:
+def rebuild_wiki(wiki_root: Path, volume_output_roots: List[Path]) -> None:
+    """Regenerate every pipeline-owned page of the wiki from processed volumes.
+
+    Used after a pipeline change that affects all volumes (article
+    boundaries, authors, reading order): ``articles/``, ``people/``,
+    ``volumes/``, ``index.md`` and ``_graph/corpus.jsonld`` are rebuilt from
+    scratch, so pages that no longer exist (a mis-split author, a changed
+    article boundary) disappear. Agent-owned sections (``## Summary``,
+    ``## Mentions``, ``## Notes``) of pages that still exist are carried
+    over. ``CLAUDE.md``, ``README.md``, ``series.md`` and ``log.md`` are
+    kept (one log entry is appended).
+    """
+    wiki_root = Path(wiki_root).resolve()
+    if not (wiki_root / "_context.json").exists():
+        raise SystemExit(f"{wiki_root} is not an initialised wiki (no _context.json).")
+    vols = sorted((Path(v).resolve() for v in volume_output_roots),
+                  key=lambda v: (_RE_SLUG_YEAR.search(v.name).group(1)
+                                 if _RE_SLUG_YEAR.search(v.name) else v.name))
+
+    saved: Dict[str, Dict[str, str]] = {}
+    for sub in ("articles", "people", "volumes"):
+        d = wiki_root / sub
+        if not d.exists():
+            continue
+        for f in d.glob("*.md"):
+            zones = _read_existing_zones(f)
+            if any(v.strip() and "*To be added.*" not in v for v in zones.values()):
+                saved[f"{sub}/{f.name}"] = zones
+            f.unlink()
+    series = _series_node()
+    (wiki_root / "_graph").mkdir(exist_ok=True)
+    (wiki_root / "_graph" / "corpus.jsonld").write_text(
+        json.dumps({"@context": CONTEXT, "@graph": [series]}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    for v in vols:
+        add_volume(wiki_root, v, log=False)
+    restored = 0
+    for rel, zones in saved.items():
+        f = wiki_root / rel
+        if f.exists():
+            f.write_text(_replace_agent_sections(f.read_text(encoding="utf-8"), zones),
+                         encoding="utf-8")
+            restored += 1
+    today = date.today().isoformat()
+    corpus = json.loads((wiki_root / "_graph" / "corpus.jsonld").read_text(encoding="utf-8"))
+    counts: Dict[str, int] = {}
+    for n in corpus["@graph"]:
+        t = n.get("@type")
+        t = t[0] if isinstance(t, list) else t
+        counts[t] = counts.get(t, 0) + 1
+    entry = (
+        f"\n## [{today}] rebuild-wiki | {len(vols)} volumes\n"
+        f"- regenerated articles/, people/, volumes/, index.md, _graph/corpus.jsonld\n"
+        f"- volumes: {', '.join(v.name for v in vols)}\n"
+        f"- {counts.get('ScholarlyArticle', 0)} articles, {counts.get('Person', 0)} people\n"
+        f"- agent-authored sections carried over: {restored} pages\n"
+    )
+    log_path = wiki_root / "log.md"
+    existing = log_path.read_text(encoding="utf-8") if log_path.exists() else "# Log\n"
+    log_path.write_text(existing.rstrip() + "\n" + entry, encoding="utf-8")
+    print(f"rebuild-wiki → {wiki_root}: {len(vols)} volumes, "
+          f"{counts.get('ScholarlyArticle', 0)} articles, {counts.get('Person', 0)} people")
+
+
+def add_volume(wiki_root: Path, volume_output_root: Path, *, log: bool = True) -> None:
     """Merge one processed volume into the corpus wiki at ``wiki_root``.
 
     ``volume_output_root`` is something like ``output/pjb-048-2006/`` — the
@@ -214,14 +279,15 @@ def add_volume(wiki_root: Path, volume_output_root: Path) -> None:
     n_articles = _copy_article_mds(wiki_root, src_wiki, slug)
 
     # 5) Merge person pages
-    n_people_new, n_people_merged = _merge_person_mds(wiki_root, src_wiki)
+    n_people_new, n_people_merged = _merge_person_mds(wiki_root, src_wiki, slug)
 
     # 6) Regenerate the index
     (wiki_root / "index.md").write_text(_render_index(new_corpus_doc), encoding="utf-8")
 
     # 7) Append to the log
-    _append_log_entry(wiki_root, slug, n_articles, n_people_new,
-                      n_people_merged)
+    if log:
+        _append_log_entry(wiki_root, slug, n_articles, n_people_new,
+                          n_people_merged)
 
     print(f"add-volume {slug} → {wiki_root}:")
     print(f"  articles: {n_articles}")
@@ -233,13 +299,23 @@ def add_volume(wiki_root: Path, volume_output_root: Path) -> None:
 
 # --- graph merge -----------------------------------------------------------
 
+def _owned_by_volume(nid: str, slug: str) -> bool:
+    """Is graph node ``nid`` minted for volume ``slug`` (article, page,
+    figure, footnote, section, the volume itself)?"""
+    return (nid == f"pjb:vol/{slug}" or nid.startswith(f"pjb:vol/{slug}/")
+            or nid.startswith(f"pjb:art/{slug}-"))
+
+
 def _merge_volume_graph(wiki_root: Path, vol_root: Path, slug: str) -> Tuple[dict, dict]:
     """Merge the volume's ``.jsonld`` into the corpus graph and write back.
 
     Returns ``(merged_doc, counts)`` where counts is ``{added, updated,
-    total}``. Same dedupe semantics as ``scripts/merge_graphs.py``: nodes
-    are merged by ``@id``; for collisions, missing keys are filled in
-    from the incoming node, existing keys are kept.
+    total}``. Nodes that belong to this volume (its articles, pages,
+    figures, footnotes, sections) are *replaced* by the incoming version
+    and those no longer produced are dropped, so re-adding a re-processed
+    volume updates the graph instead of keeping stale values. Shared nodes
+    (Persons, the Series) are merged: missing keys are filled in, existing
+    keys kept. Persons no longer referenced by any node are removed.
     """
     corpus_path = wiki_root / "_graph" / "corpus.jsonld"
     vol_jsonld_path = vol_root / "graph" / f"{slug}.jsonld"
@@ -250,10 +326,15 @@ def _merge_volume_graph(wiki_root: Path, vol_root: Path, slug: str) -> Tuple[dic
     corpus_doc = json.loads(corpus_path.read_text(encoding="utf-8"))
     vol_doc = json.loads(vol_jsonld_path.read_text(encoding="utf-8"))
 
+    incoming_ids = {n.get("@id") for n in vol_doc.get("@graph", []) if n.get("@id")}
     by_id: "OrderedDict[str, dict]" = OrderedDict()
     for n in corpus_doc.get("@graph", []):
-        if n.get("@id"):
-            by_id[n["@id"]] = n
+        nid = n.get("@id")
+        if not nid:
+            continue
+        if _owned_by_volume(nid, slug) and nid not in incoming_ids:
+            continue   # stale node of an earlier run of this volume
+        by_id[nid] = n
 
     added = updated = 0
     for n in vol_doc.get("@graph", []):
@@ -262,22 +343,51 @@ def _merge_volume_graph(wiki_root: Path, vol_root: Path, slug: str) -> Tuple[dic
             continue
         if nid in by_id:
             updated += 1
-            existing = by_id[nid]
-            for k, v in n.items():
-                if k == "@id":
-                    continue
-                if k not in existing:
-                    existing[k] = v
+            if _owned_by_volume(nid, slug):
+                by_id[nid] = dict(n)
+            else:
+                existing = by_id[nid]
+                for k, v in n.items():
+                    if k != "@id" and k not in existing:
+                        existing[k] = v
         else:
             added += 1
             by_id[nid] = dict(n)
 
+    _drop_orphan_persons(by_id)
     merged = {"@context": CONTEXT, "@graph": list(by_id.values())}
     corpus_path.write_text(
         json.dumps(merged, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return merged, {"added": added, "updated": updated, "total": len(by_id)}
+
+
+def _referenced_ids(node) -> set:
+    out = set()
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "@id":
+                continue
+            if isinstance(v, (dict, list)):
+                out |= _referenced_ids(v)
+            elif isinstance(v, str) and v.startswith("pjb:person/"):
+                out.add(v)
+        if set(node) == {"@id"}:
+            out.add(node["@id"])
+    elif isinstance(node, list):
+        for x in node:
+            out |= _referenced_ids(x)
+    return out
+
+
+def _drop_orphan_persons(by_id: "OrderedDict[str, dict]") -> None:
+    refs = set()
+    for nid, n in by_id.items():
+        if not nid.startswith("pjb:person/"):
+            refs |= _referenced_ids(n)
+    for nid in [k for k in by_id if k.startswith("pjb:person/") and k not in refs]:
+        del by_id[nid]
 
 
 # --- volume page -----------------------------------------------------------
@@ -320,6 +430,13 @@ def _copy_article_mds(wiki_root: Path, src_wiki: Path, slug: str) -> int:
         return 0
     dst_dir = wiki_root / "articles"
     dst_dir.mkdir(parents=True, exist_ok=True)
+
+    # Article pages of this volume that the new run no longer produces
+    # (article boundaries changed) are removed.
+    incoming = {p.name for p in src_dir.glob("*.md")}
+    for old in dst_dir.glob(f"{slug}-*.md"):
+        if old.name not in incoming:
+            old.unlink()
 
     n = 0
     for src in sorted(src_dir.glob("*.md")):
@@ -371,7 +488,7 @@ _RE_ART_ID_IN_LINK = re.compile(r"\(\.\./articles/([a-z0-9-]+)\.md\)")
 _RE_SLUG_YEAR = re.compile(r"pjb-\d{3}-(\d{4})")
 
 
-def _merge_person_mds(wiki_root: Path, src_wiki: Path) -> Tuple[int, int]:
+def _merge_person_mds(wiki_root: Path, src_wiki: Path, slug: str = "") -> Tuple[int, int]:
     """Merge per-volume person pages into ``people/``.
 
     For each person page in ``output/<slug>/wiki/people/``:
@@ -392,6 +509,7 @@ def _merge_person_mds(wiki_root: Path, src_wiki: Path) -> Tuple[int, int]:
     dst_dir.mkdir(parents=True, exist_ok=True)
 
     n_new = n_merged = 0
+    incoming = {p.name for p in src_dir.glob("*.md")}
     for src in sorted(src_dir.glob("*.md")):
         dest = dst_dir / src.name
         if not dest.exists():
@@ -400,7 +518,41 @@ def _merge_person_mds(wiki_root: Path, src_wiki: Path) -> Tuple[int, int]:
         else:
             _merge_one_person_page(src, dest)
             n_merged += 1
+    # People who appeared in an earlier run of this volume but not in this
+    # one (a mis-split author name, a reviewed book's author that used to
+    # be listed as the review's author): drop their subsection for this
+    # volume, and the page if nothing is left.
+    if slug:
+        for dest in sorted(dst_dir.glob("*.md")):
+            if dest.name in incoming:
+                continue
+            _remove_volume_from_person_page(dest, slug)
     return (n_new, n_merged)
+
+
+def _remove_volume_from_person_page(dest: Path, slug: str) -> None:
+    text = dest.read_text(encoding="utf-8")
+    fm, body = _split_frontmatter(text)
+    subs = _parse_appears_subsections(body)
+    if slug not in subs:
+        return
+    del subs[slug]
+    existing_zones = _read_existing_zones(dest)
+    has_agent_text = any(v.strip() and "*To be added.*" not in v
+                         for v in existing_zones.values())
+    if not subs and not has_agent_text:
+        dest.unlink()
+        return
+    m = re.match(r"#\s+[^\n]+\n", body.lstrip("\n"))
+    title_line = m.group(0) if m else ""
+    appears_block = "## Appears in\n\n"
+    for _, (heading, items) in subs.items():
+        appears_block += f"### {heading}\n\n{items}\n\n"
+    agent_block = "".join(
+        _render_existing_or_placeholder(s_, existing_zones) for s_ in AGENT_OWNED_SECTIONS
+    )
+    dest.write_text(fm + "\n" + title_line + "\n" + appears_block + agent_block,
+                    encoding="utf-8")
 
 
 def _merge_one_person_page(src: Path, dest: Path) -> None:

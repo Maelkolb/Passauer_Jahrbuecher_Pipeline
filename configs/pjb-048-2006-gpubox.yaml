@@ -1,10 +1,10 @@
 # Copy this file for each new volume — only the top half typically changes.
 
 # --- Source ----------------------------------------------------------
-pdf_path: "/home/tobias/2026-05-12_16-22_XLVII_2005_finished/pdf/2026-05-12_16-22_XLVII_2005.pdf"
-volume_number: 47
-volume_number_roman: "XLVII"
-volume_year: 2005
+pdf_path: "/home/tobias/2026-05-12_12-39_XLVIII_2006_finished/pdf/2026-05-12_12-39_XLVIII_2006.pdf"
+volume_number: 48
+volume_number_roman: "XLVIII"
+volume_year: 2006
 
 # --- Bibliographic metadata ------------------------------------------
 volume_title: "Passauer Jahrbuch"

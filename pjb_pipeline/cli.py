@@ -1,11 +1,14 @@
 """Command-line interface.
 
-Two entry points:
+Entry points:
 
-* ``pjb-pipeline run <config.yaml>`` — process one volume end-to-end.
+* ``pjb-pipeline run <config.yaml>`` — process one volume end-to-end
+  (source: a book PDF or a folder of page images).
 * ``pjb-pipeline merge-graphs <out.jsonld> <vol1.jsonld> [vol2.jsonld …]``
   — merge per-volume JSON-LD graphs into one (so the same Person node
   appears once across the whole collection).
+* ``pjb-pipeline init-wiki`` / ``add-volume`` / ``rebuild-wiki`` — maintain
+  the corpus wiki repo.
 
 All flags on ``run`` override the matching YAML key, so the same config
 file can be used on Colab and on the GPU host with one ``--ocr-method``
@@ -35,8 +38,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # ---- run -------------------------------------------------------
     r = sub.add_parser("run", help="Process one volume end-to-end")
     r.add_argument("config", type=Path, help="Path to volume YAML config")
-    r.add_argument("--pdf", type=str, default=None,
-                   help="Override pdf_path from the config")
+    r.add_argument("--source", "--pdf", dest="source", type=str, default=None,
+                   help="Override source_path from the config: a book PDF or a "
+                        "folder of page images")
     r.add_argument("--output-root", type=str, default=None,
                    help="Override output_root from the config")
     r.add_argument("--page-range", type=str, default=None,
@@ -77,12 +81,20 @@ def _build_parser() -> argparse.ArgumentParser:
     av.add_argument("volume_output_root", type=Path,
                     help="A volume's pipeline output dir (e.g. output/pjb-048-2006)")
 
+    # ---- rebuild-wiki ----------------------------------------------
+    rw = sub.add_parser("rebuild-wiki",
+                        help="Regenerate the wiki from several processed volumes "
+                             "(removes pages that are no longer produced)")
+    rw.add_argument("wiki_root", type=Path, help="The wiki repo (must already be init'd)")
+    rw.add_argument("volume_output_roots", type=Path, nargs="+",
+                    help="Processed volume dirs (e.g. output/pjb-*/)")
+
     return p
 
 
 def _apply_overrides(cfg: VolumeConfig, args) -> VolumeConfig:
-    if args.pdf:
-        cfg.pdf_path = args.pdf
+    if args.source:
+        cfg.source_path = cfg.pdf_path = args.source
     if args.output_root:
         cfg.output_root = args.output_root
     if args.page_range:
@@ -162,6 +174,11 @@ def main(argv=None) -> int:
     if args.command == "add-volume":
         from .wiki_assembler import add_volume
         add_volume(args.wiki_root, args.volume_output_root)
+        return 0
+
+    if args.command == "rebuild-wiki":
+        from .wiki_assembler import rebuild_wiki
+        rebuild_wiki(args.wiki_root, args.volume_output_roots)
         return 0
 
     return 1

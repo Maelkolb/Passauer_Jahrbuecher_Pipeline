@@ -498,7 +498,7 @@ def build_volume_index(cfg: VolumeConfig, articles: list, unified: list) -> str:
           <span class="toc-pages">S. {a["page_first"]}–{a["page_last"]}</span>
         </li>''')
 
-    total_pages = sum(len(a.get("pages", [])) for a in articles)
+    total_pages = len(unified)
     total_articles = sum(1 for a in articles if a["title"] != "Frontmatter")
 
     body = f'''

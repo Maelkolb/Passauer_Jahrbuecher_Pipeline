@@ -52,11 +52,23 @@ class OCRBackend:
 class VolumeConfig:
     """One volume's worth of configuration."""
 
-    # --- Source ----------------------------------------------------------
-    pdf_path: str                         # absolute or relative path to the PDF
+    # --- Volume identity -------------------------------------------------
     volume_number: int                    # 48
     volume_number_roman: str              # "XLVIII"
     volume_year: int                      # 2006
+
+    # --- Source ----------------------------------------------------------
+    # Either a scanned book as one PDF, or a folder of individually scanned
+    # page images (JPEG/PNG/TIFF/WebP, natural sort order = page order). A
+    # scanner output folder also works: it is searched for the images or
+    # the single PDF inside it. ``pdf_path`` is the older name of the same
+    # setting and is still accepted.
+    source_path: Optional[str] = None
+    pdf_path: Optional[str] = None
+    # Page images from a folder are scaled down so that their longer side
+    # is at most this many pixels (≈ the 200 dpi PDF render of a volume);
+    # ``null`` keeps the scans at full resolution.
+    image_max_side: Optional[int] = 2200
     volume_title: str = "Passauer Jahrbuch"
     volume_subtitle: str = (
         "Beiträge zur Geschichte und Kultur Ostbaierns"
@@ -115,6 +127,15 @@ class VolumeConfig:
     def __post_init__(self):
         if not self.slug:
             self.slug = f"pjb-{self.volume_number:03d}-{self.volume_year}"
+        if not self.source_path and self.pdf_path:
+            self.source_path = self.pdf_path
+        if not self.pdf_path and self.source_path:
+            self.pdf_path = self.source_path
+
+    @property
+    def source(self) -> Optional[str]:
+        """The configured input (PDF file or page-image folder)."""
+        return self.source_path or self.pdf_path
 
     # ---- IO -------------------------------------------------------------
     @classmethod
@@ -144,7 +165,7 @@ class VolumeConfig:
             data["toc_section_labels"] = tuple(data["toc_section_labels"])
 
         # Expand path-like fields
-        for key in ("pdf_path", "output_root"):
+        for key in ("pdf_path", "source_path", "output_root"):
             if key in data:
                 data[key] = expand(data[key])
 

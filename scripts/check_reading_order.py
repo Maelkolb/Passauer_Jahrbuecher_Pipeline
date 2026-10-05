@@ -1,107 +1,123 @@
 #!/usr/bin/env python3
-"""Audit reading order across a processed volume.
+"""Audit reading order and block roles across a processed volume.
 
-For every page it compares Chandra's raw block emission order against the
-pipeline's column-major reading order and reports pages where they differ
-(those are the pages where the geometric re-sort is doing real work — and
-therefore the ones worth eyeballing in the wiki). It also flags broken
-hyphenation joins: a block whose text ends in "<word>-" whose continuation
-does not immediately follow in reading order.
+Runs the production layout analysis (typography calibration, block-role
+correction, reading-order choice — see ``pjb_pipeline/structure/layout.py``)
+on the cached OCR of a volume and reports:
+
+* the calibrated print sizes (body vs footnote text),
+* how many blocks were re-labelled (text → footnote / caption),
+* on how many pages the reading order differs from Chandra's, and which
+  candidate order won,
+* **broken hyphenation joins** — a body block ending in "Wort-" whose
+  successor in reading order (on the same page, or the first body block
+  of the next page) does not continue it,
+* **stranded continuations** — a body block starting lower-case right
+  after a finished sentence.
+
+The last two are the numbers that matter: a handful per volume is normal
+(compound words like "Böhmerwald-Liedes", poems, OCR omissions); many, or
+the same page over and over, means the output needs a look before it is
+published.
 
 Usage:
     python3 scripts/check_reading_order.py output/pjb-052-2010
     python3 scripts/check_reading_order.py output/pjb-052-2010 --page 18
+    python3 scripts/check_reading_order.py output/pjb-052-2010 --list
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from pjb_pipeline.normalize import build_unified_page          # noqa: E402
-from pjb_pipeline.structure.columns import detect_columns      # noqa: E402
+from pjb_pipeline.normalize import apply_layout, build_unified_page   # noqa: E402
+from pjb_pipeline.structure.layout import (                            # noqa: E402
+    _ABBREV_END, _HYPHEN_END, _TERMINAL, _clean_tail, _first_letter,
+    calibrate, last_body_block,
+)
 
-
-def audit_page(raw: dict) -> dict:
-    chandra = [b.get("id") for b in raw.get("blocks", [])]
-    # Run the exact production path (bbox conversion + column detection +
-    # reading_order) so the comparison reflects what the emitters see.
-    unified = build_unified_page(json.loads(json.dumps(raw)))
-    ordered = unified["blocks"]
-    final = [b.get("id") for b in ordered]
-    cols = detect_columns(unified)
-
-    # Only body prose can host a *misplaced* continuation. A body block
-    # ending in "<word>-" followed by a non-prose region (footnote, footer,
-    # image, title, …) is a normal cross-page break — the word's other half
-    # is on the following page — so we ignore those. We only flag a break
-    # where the very next block is also body prose yet starts uppercase,
-    # which is the signature of a continuation that landed out of order.
-    PROSE = {"text", "paragraph", "body"}
-    bytid = {b.get("id"): b for b in ordered}
-    hyphen_breaks = []
-    for i, bid in enumerate(final[:-1]):
-        cur = bytid[bid]
-        if cur.get("type") not in PROSE:
-            continue
-        t = (cur.get("text") or "").rstrip()
-        if not (t.endswith("-") and not t.endswith(" -")):
-            continue
-        nxt_block = bytid[final[i + 1]]
-        if nxt_block.get("type") not in PROSE:
-            continue
-        nxt = (nxt_block.get("text") or "").lstrip()
-        first = next((c for c in nxt if c.isalpha()), "")
-        if first and not first.islower():
-            hyphen_breaks.append((bid, final[i + 1]))
-
-    return {
-        "columns": len(cols),
-        "reordered": chandra != final,
-        "n_moved": sum(1 for a, b in zip(chandra, final) if a != b),
-        "hyphen_breaks": hyphen_breaks,
-    }
+PROSE = {"text", "list"}
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("volume_dir", help="e.g. output/pjb-052-2010")
-    ap.add_argument("--page", type=int, default=None)
+    ap.add_argument("--page", type=int, default=None, help="print one page's final order")
+    ap.add_argument("--list", action="store_true", help="list every flagged join")
     args = ap.parse_args()
 
     interim = Path(args.volume_dir) / "interim"
     if not interim.exists():
         sys.exit(f"no interim dir at {interim}")
-
     files = sorted(interim.glob("page_*.json"))
+    raws = [json.loads(f.read_text()) for f in files]
+    pages = [build_unified_page(json.loads(json.dumps(r)), layout=False) for r in raws]
+
+    typo = calibrate(pages)
+    prev_tail = None
+    prev_note = None
+    reports = []
+    for p in pages:
+        apply_layout(p, typo, prev_tail=prev_tail, prev_footnote=prev_note)
+        prev_tail = last_body_block(p) or prev_tail
+        notes = [b for b in p["blocks"] if b["type"] == "footnote"]
+        prev_note = notes[-1] if notes else None
+        reports.append(p.pop("_layout"))
+
     if args.page is not None:
-        files = [f for f in files if f.stem == f"page_{args.page:04d}"]
+        for p, r in zip(pages, reports):
+            if p["page_num"] != args.page:
+                continue
+            print(f"page {p['page_num']}: strategy {r['strategy']}, score {r['score']}, "
+                  f"repaired {r['repaired']}")
+            for b in p["blocks"]:
+                t = (b.get("text") or "").replace("\n", " ")
+                note = f"  [{b['role_note']}]" if b.get("role_note") else ""
+                print(f"  {b['id']:12s} {b['type']:16s} {t[:70]!r}{note}")
+        return
 
-    reordered_pages, flagged = [], []
-    for f in files:
-        raw = json.loads(f.read_text())
-        pn = raw.get("page_num", int(f.stem.split("_")[1]))
-        res = audit_page(raw)
-        if res["reordered"]:
-            reordered_pages.append(pn)
-        if res["hyphen_breaks"]:
-            flagged.append((pn, res["hyphen_breaks"]))
+    hyph_bad, lc_bad = [], []
+    prev = None
+    for p in pages:
+        prose = [b for b in p["blocks"] if b["type"] in PROSE and (b.get("text") or "").strip()]
+        seq = ([prev] if prev is not None else []) + prose
+        for a, b in zip(seq, seq[1:]):
+            at = _clean_tail(a.get("text") or "")
+            f = _first_letter(b.get("text") or "")
+            if not at or not f:
+                continue
+            if _HYPHEN_END.search(at) and not f.islower():
+                hyph_bad.append((p["page_num"], a["id"], b["id"]))
+            elif f.islower() and _TERMINAL.search(at) and not _ABBREV_END.search(at):
+                lc_bad.append((p["page_num"], a["id"], b["id"]))
+        if prose:
+            prev = prose[-1]
 
-    print(f"Pages scanned: {len(files)}")
-    print(f"Pages where reading_order changed Chandra's order: "
-          f"{len(reordered_pages)}")
-    if reordered_pages:
-        print("  " + ", ".join(str(p) for p in reordered_pages))
-    print(f"Pages with a broken hyphenation join (continuation not adjacent): "
-          f"{len(flagged)}")
-    for pn, breaks in flagged:
-        print(f"  page {pn}:")
-        for a, b in breaks:
-            print(f"    {a} -/-> {b}")
-    if not flagged:
-        print("  none — every hyphenation break is followed by its continuation")
+    reclass = Counter(c[2] for r in reports for c in r["reclassified"])
+    moved = [r for r in reports if r["moved"]]
+    strategies = Counter(r["strategy"] for r in moved)
+    print(f"Pages scanned: {len(pages)}")
+    print(f"Print size: body {typo.body:.2f}, footnotes {typo.small:.2f} chars/kpx² "
+          f"(threshold {typo.threshold:.2f})")
+    print(f"Blocks re-labelled: " + (", ".join(f"text → {k}: {v}" for k, v in reclass.items())
+                                     or "none"))
+    print(f"Pages where the reading order differs from Chandra's: {len(moved)}"
+          + (f"  ({', '.join(f'{k} {v}' for k, v in strategies.most_common())})" if moved else ""))
+    print(f"Broken hyphenation joins: {len(hyph_bad)}")
+    print(f"Stranded continuations (lower-case start after a finished sentence): {len(lc_bad)}")
+    if args.list:
+        for kind, rows in (("hyphen", hyph_bad), ("continuation", lc_bad)):
+            for pn, a, b in rows:
+                print(f"  {kind:12s} page {pn}: {a} -/-> {b}")
+    elif hyph_bad or lc_bad:
+        pages_flagged = sorted({pn for pn, _, _ in hyph_bad + lc_bad})
+        print("  pages: " + ", ".join(str(x) for x in pages_flagged[:60])
+              + (" …" if len(pages_flagged) > 60 else ""))
+        print("  (run with --list for the block ids, --page N to see one page)")
 
 
 if __name__ == "__main__":

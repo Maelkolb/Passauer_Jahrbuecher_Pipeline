@@ -168,6 +168,7 @@ def _build_body(articles: List[dict]) -> ET.Element:
     text_el = ET.Element(_t("text"))
     body = ET.SubElement(text_el, _t("body"))
 
+    emitted_pb = set()
     for art in articles:
         attrs = {"type": "article", **_xmlid(art["id"])}
         if art.get("section"):
@@ -178,18 +179,34 @@ def _build_body(articles: List[dict]) -> ET.Element:
 
         if art["title"] and art["title"] != "Frontmatter":
             ET.SubElement(div, _t("head"), {"type": "main"}).text = art["title"]
-            if art.get("author"):
+            authors = art.get("authors")
+            if authors is None:
+                authors = [art["author"]] if art.get("author") else []
+            if authors:
                 byline = ET.SubElement(div, _t("byline"))
-                ET.SubElement(byline, _t("docAuthor")).text = art["author"]
+                for name in authors:
+                    ET.SubElement(byline, _t("docAuthor")).text = name
+            rev = art.get("review")
+            if rev:
+                bibl = ET.SubElement(div, _t("bibl"), {"type": "reviewed"})
+                for name in rev.get("authors") or []:
+                    ET.SubElement(bibl, _t("author")).text = name
+                for name in rev.get("editors") or []:
+                    ET.SubElement(bibl, _t("editor")).text = name
+                ET.SubElement(bibl, _t("title")).text = rev.get("title") or art["title"]
 
         footnote_counter = count(1)
         footnote_collector = []
 
         for p in art.get("pages", []):
-            ET.SubElement(div, _t("pb"), {
-                "n":    str(p["page_num"]),
-                "facs": f"#page_{p['page_num']:04d}",
-            })
+            # Articles that share a page: the page break belongs to the
+            # one in which the page begins.
+            if p["page_num"] not in emitted_pb:
+                emitted_pb.add(p["page_num"])
+                ET.SubElement(div, _t("pb"), {
+                    "n":    str(p["page_num"]),
+                    "facs": f"#page_{p['page_num']:04d}",
+                })
             for blk in p["blocks"]:
                 # Skip the section-header on the first page that duplicates the title
                 if (blk["type"] == "section-header"

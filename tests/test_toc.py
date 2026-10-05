@@ -57,7 +57,8 @@ class TestSplitAuthorTitle:
         author, title = split_author_title(
             "Hartmut Wolff/Walter Wandling, Lateinische Inschriften aus dem Passauer Raum"
         )
-        assert author == "Hartmut Wolff/Walter Wandling"
+        # several persons are joined with " / " in the display string
+        assert author == "Hartmut Wolff / Walter Wandling"
         assert title == "Lateinische Inschriften aus dem Passauer Raum"
 
     def test_no_comma_returns_full_title(self):

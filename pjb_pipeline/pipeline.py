@@ -1,7 +1,8 @@
 """Pipeline orchestration.
 
-Runs every stage from PDF to bundled output, recording timings and writing
-all artefacts to ``cfg.out_dir``.
+Runs every stage from the scanned source (a book PDF or a folder of page
+images) to bundled output, recording timings and writing all artefacts to
+``cfg.out_dir``. Re-running a volume reuses rendered pages and cached OCR.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
 
     timings: dict = {}
 
-    with stage("Render PDF → page images", timings):
+    with stage("Prepare page images (PDF or image folder)", timings):
         pages = render.run(cfg)
 
     with stage("OCR + layout (Chandra)", timings):
@@ -60,8 +61,17 @@ def run(cfg: VolumeConfig, *, assets_dir: Optional[Path] = None) -> dict:
             if a["title"] == "Frontmatter":
                 continue
             sec = a.get("section") or "?"
-            print(f"   • {a['num']:>2}. p.{a['page_first']:>3}–{a['page_last']:<3} "
-                  f"[{sec:<14s}]  {a['title'][:60]}")
+            flag = " " if a.get("start_matched", True) else "?"
+            who = " / ".join(a.get("authors") or []) or "—"
+            if a.get("review"):
+                who = f"rev. {who}"
+            print(f"   •{flag}{a['num']:>2}. p.{a['page_first']:>3}–{a['page_last']:<3} "
+                  f"[{sec:<14s}] {who[:32]:<32s} {a['title'][:50]}")
+        n_real = sum(1 for a in articles if a["title"] != "Frontmatter")
+        n_matched = sum(1 for a in articles if a.get("start_matched"))
+        if any("start_matched" in a for a in articles):
+            print(f"   article starts located at block level: {n_matched}/{n_real} "
+                  f"(? = title not found on its page; article starts at the page top)")
 
     with stage("Link footnote references", timings):
         footnotes_by_article: dict = {}

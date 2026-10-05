@@ -230,15 +230,40 @@ def ocr_page(
 # Stage entry point
 # ---------------------------------------------------------------------------
 
+def _cached(interim_path: Path) -> bool:
+    try:
+        return bool(json.loads(interim_path.read_text()).get("raw"))
+    except Exception:
+        return False
+
+
 def run(cfg: VolumeConfig, pages: List[dict], timings: dict) -> None:
     """Run OCR over every rendered page. Writes interim JSON per page to
-    ``cfg.interim_dir``. Records average OCR time in ``timings``."""
-    manager, parse_layout, BatchInputItem = _load_backend(cfg)
+    ``cfg.interim_dir``. Records average OCR time in ``timings``.
+
+    When every page is already cached the OCR server is not contacted at
+    all — re-running a processed volume only re-parses the cached output.
+    """
+    todo = [r for r in pages
+            if not _cached(cfg.interim_dir / f"page_{r['page_num']:04d}.json")]
+    if todo:
+        manager, parse_layout, BatchInputItem = _load_backend(cfg)
+    else:
+        print("   all pages cached — OCR server not needed")
+        manager, BatchInputItem = None, None
+        try:
+            from chandra.output import parse_layout
+        except ImportError:
+            parse_layout = None
 
     per_page_times: List[float] = []
     n_resumed = 0
     n_inferred = 0
     for rec in tqdm(pages, desc="ocr", unit="pg"):
+        interim_path = cfg.interim_dir / f"page_{rec['page_num']:04d}.json"
+        if parse_layout is None and _cached(interim_path):
+            # chandra not installed here: keep the cached parse as it is
+            continue
         result = ocr_page(rec, manager, BatchInputItem, parse_layout, cfg.interim_dir)
         if result["_resumed"]:
             n_resumed += 1
