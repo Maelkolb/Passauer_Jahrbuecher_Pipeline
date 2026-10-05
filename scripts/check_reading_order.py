@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -36,11 +37,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pjb_pipeline.normalize import apply_layout, build_unified_page   # noqa: E402
 from pjb_pipeline.structure.layout import (                            # noqa: E402
-    _ABBREV_END, _HYPHEN_END, _TERMINAL, _clean_tail, _first_letter,
+    _ABBREV_END, _ENUMERATOR, _HYPHEN_END, _TERMINAL, _clean_tail, _first_letter,
     calibrate, last_body_block,
 )
 
 PROSE = {"text", "list"}
+VERSE = re.compile(r"\S {3,}\S.*\S {3,}\S")   # verse lines Chandra joins with wide gaps
 
 
 def main() -> None:
@@ -81,9 +83,14 @@ def main() -> None:
         return
 
     hyph_bad, lc_bad = [], []
+    verse_skipped = 0
     prev = None
     for p in pages:
         prose = [b for b in p["blocks"] if b["type"] in PROSE and (b.get("text") or "").strip()]
+        # Song and verse editions (numbered stanzas, lines starting in lower
+        # case) would flood the continuation count; they are not errors.
+        stanza_numbers = sum(1 for b in prose if re.fullmatch(r"\s*\d{1,2}\.?\s*", b.get("text") or ""))
+        verse_page = stanza_numbers >= 2 or sum(1 for b in prose if VERSE.search(b.get("text") or "")) >= 2
         seq = ([prev] if prev is not None else []) + prose
         for a, b in zip(seq, seq[1:]):
             at = _clean_tail(a.get("text") or "")
@@ -92,8 +99,12 @@ def main() -> None:
                 continue
             if _HYPHEN_END.search(at) and not f.islower():
                 hyph_bad.append((p["page_num"], a["id"], b["id"]))
-            elif f.islower() and _TERMINAL.search(at) and not _ABBREV_END.search(at):
-                lc_bad.append((p["page_num"], a["id"], b["id"]))
+            elif (f.islower() and _TERMINAL.search(at) and not _ABBREV_END.search(at)
+                  and not _ENUMERATOR.match(b.get("text") or "")):
+                if verse_page:
+                    verse_skipped += 1
+                else:
+                    lc_bad.append((p["page_num"], a["id"], b["id"]))
         if prose:
             prev = prose[-1]
 
@@ -108,7 +119,8 @@ def main() -> None:
     print(f"Pages where the reading order differs from Chandra's: {len(moved)}"
           + (f"  ({', '.join(f'{k} {v}' for k, v in strategies.most_common())})" if moved else ""))
     print(f"Broken hyphenation joins: {len(hyph_bad)}")
-    print(f"Stranded continuations (lower-case start after a finished sentence): {len(lc_bad)}")
+    print(f"Stranded continuations (lower-case start after a finished sentence): {len(lc_bad)}"
+          + (f"  (+{verse_skipped} in verse/song editions, not counted)" if verse_skipped else ""))
     if args.list:
         for kind, rows in (("hyphen", hyph_bad), ("continuation", lc_bad)):
             for pn, a, b in rows:

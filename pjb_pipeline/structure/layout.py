@@ -485,8 +485,10 @@ _ABBREV_END = re.compile(
     r"(?:\b[A-Za-zÄÖÜäöü]|\bbzw|\bvgl|\bca|\bNr|\bSt|\bDr|\bHl|\bhl|\busw|\bz\.\s?B|\bu\.\s?a"
     r"|\bd\.\s?h|\betc|\bS|\bAbb|\bAnm|\bProf|\bgeb|\bgest|\bsog|\bJh|\bJhs|\bBd|\bHg"
     r"|\bHrsg|\bebd|\bf|\bff|\bs\.\s?o|\bs\.\s?u|\b[IVXLC]{1,6}|\b\d{1,2})\.$")
-_TERMINAL = re.compile(r"[.!?:][\"'“”»«’)\]]*$")
+# Sentence ends. A colon is not one: "… wie folgt: im Westen …" is normal.
+_TERMINAL = re.compile(r"[.!?][\"'“”»«’)\]]*$")
 _HYPHEN_END = re.compile(r"[a-zäöüß]-$")
+_ENUMERATOR = re.compile(r"^\s*(?:[a-z]\)|\(?[a-z]\)|\.\.\.|…|\[\.\.\.\])")
 
 
 def _clean_tail(t: str) -> str:
@@ -511,6 +513,8 @@ def continuity(a_text: str, b_text: str) -> float:
     a = _clean_tail(a_text)
     if not a:
         return 0.0
+    if _ENUMERATOR.match(b_text or ""):
+        return 0.0          # "b) …", "… und": apparatus items, quotation ellipses
     f = _first_letter(b_text)
     if not f:
         return 0.0
