@@ -103,8 +103,10 @@ def name_key(name: str) -> str:
 
 
 def surname_key(name: str) -> str:
-    toks = name_key(name).split()
-    return toks[-1] if toks else ""
+    """Key of the last name word, hyphenated parts kept together
+    ("Röhrer-Ertl" → "rohrerertl", not "ertl")."""
+    toks = (name or "").split()
+    return name_key(toks[-1]).replace(" ", "") if toks else ""
 
 
 # ---------------------------------------------------------------------------
@@ -667,20 +669,29 @@ class NameResolver:
             lst.append(full)
 
     def resolve(self, name: str) -> str:
-        """Return the unique known full name matching ``name``, else ``name``."""
+        """Complete an *incomplete* name from the known full names.
+
+        Only a bare surname ("Heydenreuter", "von Knorring"), initials
+        ("R. Heydenreuter") or an abbreviated particle ("Mark v. Knorring")
+        are completed, and only when exactly one known person fits. A name
+        that is already complete is returned unchanged — the contributor
+        list is OCR too, and must not overwrite a correct spelling.
+        """
         sk = surname_key(name)
         cands = self._by_surname.get(sk, [])
         if not cands:
             return name
         toks = _tokens(name)
-        if len(toks) == 1:
+        given = [t for t in toks[:-1] if t.lower() not in PARTICLES]
+        abbreviated_particle = any(t.lower() == "v." for t in toks[:-1])
+        if not given:
             return cands[0] if len(cands) == 1 else name
-        # given-name / initial compatibility
-        g = toks[0].rstrip(".").lower()
-        hits = [c for c in cands if _tokens(c)[0].lower().startswith(g)]
-        if len(hits) == 1 and len(_tokens(hits[0])) >= len(toks):
-            return hits[0]
-        return name
+        if not (all(_is_initial(t) for t in given) or abbreviated_particle):
+            return name
+        g = given[0].rstrip(".").lower()
+        n = 1 if _is_initial(given[0]) else min(3, len(g))
+        hits = [c for c in cands if _tokens(c)[0].lower()[:n] == g[:n]]
+        return hits[0] if len(hits) == 1 else name
 
     def keys(self) -> Set[str]:
         return {name_key(n) for lst in self._by_surname.values() for n in lst}

@@ -61,6 +61,7 @@ def _slug(s: str) -> str:
     """URL-safe slug. NFD-decompose, drop diacritics, lower, collapse hyphens."""
     if not s:
         return ""
+    s = s.replace("ß", "ss").replace("ẞ", "SS")   # NFKD would drop it ("Mittelstra")
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.lower()

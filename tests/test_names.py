@@ -111,10 +111,16 @@ class TestReviews:
         assert p.reviewed_editors == ["Erwin Gatz"]
 
     def test_surname_only_reviewer_is_resolved(self):
-        r = NameResolver(["Reinhard Heydenreuter", "Egon Boshof"])
+        r = NameResolver(["Reinhard Heydenreuter", "Egon Boshof", "Marc von Knorring",
+                          "Friedrich Ulf Röhre-Ertl"])
         assert r.resolve("Heydenreuter") == "Reinhard Heydenreuter"
         assert r.resolve("R. Heydenreuter") == "Reinhard Heydenreuter"
+        assert r.resolve("von Knorring") == "Marc von Knorring"
+        assert r.resolve("Mark v. Knorring") == "Marc von Knorring"
         assert r.resolve("Unbekannt") == "Unbekannt"
+        # a complete name is never rewritten (the contributor list has an OCR slip)
+        assert r.resolve("Friedrich Ulf Röhrer-Ertl") == "Friedrich Ulf Röhrer-Ertl"
+        assert r.resolve("Egon Boshoff") == "Egon Boshoff"
 
     def test_obituary_author_in_brackets(self):
         p = split_entry("Alfred Fuchs zum Gedenken (P. Praxl)")
