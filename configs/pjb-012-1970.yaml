@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/XII_1970_finished"
+volume_number: 12
+volume_number_roman: "XII"
+volume_year: 1970
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1

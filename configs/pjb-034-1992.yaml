@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/XXXIV_1992_finished"
+volume_number: 34
+volume_number_roman: "XXXIV"
+volume_year: 1992
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1

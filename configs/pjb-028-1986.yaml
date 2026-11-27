@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/XXVIII_1986_finished"
+volume_number: 28
+volume_number_roman: "XXVIII"
+volume_year: 1986
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1

@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/XVI_1974_finished"
+volume_number: 16
+volume_number_roman: "XVI"
+volume_year: 1974
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1

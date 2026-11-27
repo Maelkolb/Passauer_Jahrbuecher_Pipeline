@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/VII_1964_65_finished"
+volume_number: 7
+volume_number_roman: "VII"
+volume_year: 1964
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1

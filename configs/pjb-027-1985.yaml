@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/XXVII_1985_finished"
+volume_number: 27
+volume_number_roman: "XXVII"
+volume_year: 1985
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1

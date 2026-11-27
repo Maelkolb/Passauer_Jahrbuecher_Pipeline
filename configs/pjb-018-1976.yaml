@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/XVIII_1976_finished"
+volume_number: 18
+volume_number_roman: "XVIII"
+volume_year: 1976
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1

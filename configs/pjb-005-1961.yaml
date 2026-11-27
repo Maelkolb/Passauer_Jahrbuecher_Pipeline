@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/V_1961_finished"
+volume_number: 5
+volume_number_roman: "V"
+volume_year: 1961
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1

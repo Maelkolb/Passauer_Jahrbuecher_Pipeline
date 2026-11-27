@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/X_1968_finished"
+volume_number: 10
+volume_number_roman: "X"
+volume_year: 1968
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1

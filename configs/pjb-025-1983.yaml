@@ -1,0 +1,10 @@
+source_path: "/home/karem/Passauer_Jahrbuch/XXV_1983_finished"
+volume_number: 25
+volume_number_roman: "XXV"
+volume_year: 1983
+output_root: "/home/karem/pjb_output"
+ocr:
+  method: "vllm"
+  vllm_url: "http://localhost:8000/v1"
+  model: "datalab-to/chandra"
+  batch_size: 1
